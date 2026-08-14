@@ -30,47 +30,6 @@ THE CORRECT RESPONSE TO THIN SOURCE MATERIAL: Write less. A section with three a
 
 WHAT YOU MAY DO: Improve sentence structure, word choice, rhythm, and paragraph flow. Re-order sentences within an excerpt for logical clarity. Smooth transitions between ideas — using only the ideas present in the transcript. You own the presentation; the preacher owns every idea.`;
 
-export const PROSE_MASTERY_RULES = `PROSE MASTERY — STYLE RULES FOR THE WRITTEN PAGE
-
-SPECIFICITY OVER ABSTRACTION:
-- Every abstract claim must touch ground within two sentences with a name, a number, a place, an action, or an image drawn from the transcript.
-- If the transcript gives no concrete anchor, make the claim and stop — never manufacture a fake example.
-- Detail convinces; abstraction floats.
-
-THE PARAGRAPH TURN:
-- A paragraph is not a flat statement of one idea. It moves: a setup, a turn, a landing.
-- The final sentence should leave the reader somewhere they were not at the first.
-- Do not let a paragraph simply repeat the previous point in a different arrangement.
-
-IMAGERY DISCIPLINE:
-- Prefer one fresh image the speaker actually used over three generic ones.
-- Never mix metaphors. Carry a single controlling image through a paragraph, then drop it.
-- Do not strain one image across an entire section.
-
-RESTRAINT:
-- After a vivid image or a landed point, cut the sentence that explains it.
-- The explanation is the amateur move. Let the image or claim do the work.
-- Never write "This means that…", "What this shows is…", or "In other words…".
-
-VERBS CARRY THE WEIGHT:
-- The main verb is where energy lives.
-- Replace weak "to be" constructions with verbs that do something: break, hold, tear, shield, build, turn, carry, resist.
-- Do not write "prayer is a weapon" if the transcript shows prayer breaking, holding, tearing, or shielding.
-
-CADENCE:
-- Read every paragraph aloud in your head. If three sentences share the same shape and length, the ear hears a machine.
-- Break predictable rhythm with intent, not formula.
-- Vary sentence lengths and openings. A paragraph should feel spoken, not assembled.
-
-STAKES:
-- Each section must make the reader feel why this matters now.
-- Do not state the importance. Let the consequence be felt through concrete pressure, loss, cost, or calling.
-- The matter should land in the reader's life by implication, not by explanation.
-
-WRITING STANDARD:
-- Write with clarity, force, and moral weight, but never exceed the transcript's actual content.
-- The prose may polish the expression, but it may not enlarge the claim.`;
-
 export const PREMIUM_BOOK_STYLE_RULES = `PREMIUM BOOK STYLE STANDARDS:
 
 STYLISTIC LIBERTY — WHAT YOU OWN:
