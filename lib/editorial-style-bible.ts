@@ -30,6 +30,61 @@ THE CORRECT RESPONSE TO THIN SOURCE MATERIAL: Write less. A section with three a
 
 WHAT YOU MAY DO: Improve sentence structure, word choice, rhythm, and paragraph flow. Re-order sentences within an excerpt for logical clarity. Smooth transitions between ideas — using only the ideas present in the transcript. You own the presentation; the preacher owns every idea.`;
 
+export const PROSE_MASTERY_RULES = `PROSE MASTERY: STYLE ONLY
+
+These rules control presentation, not content. SOURCE-LOCK, SECTION SCOPE, TRANSCRIPT SEQUENCE, and DUPLICATION rules always take priority.
+
+SPECIFICITY OVER ABSTRACTION:
+- Every abstract claim must touch ground within two sentences through a name, number, place, action, or image drawn from the transcript.
+- If the transcript provides no concrete anchor, keep the claim brief.
+- Never invent an example, detail, consequence, application, or image to make the prose more specific.
+- Prefer the speaker's actual concrete details over generic explanation.
+
+THE PARAGRAPH TURN:
+- Each paragraph must move through a setup, a turn, and a landing.
+- Do not state one idea flatly and repeat it in different words.
+- The final sentence should leave the reader somewhere different from where the paragraph began.
+- The turn must come from the transcript's own argument, story, image, or consequence.
+- Do not use a paragraph turn to introduce the next section's subject.
+
+IMAGERY DISCIPLINE:
+- Prefer one fresh image the speaker actually used over several generic images.
+- Never add an image that is absent from the transcript.
+- Do not mix metaphors within a paragraph.
+- Carry one controlling image only as long as it remains natural, then release it.
+- Do not extend an image into a claim the speaker did not make.
+
+RESTRAINT:
+- After a vivid image or a landed point, stop explaining it.
+- Let the image, action, or claim carry its own weight.
+- Never write "This means that...", "What this shows is...", or "In other words...".
+- Do not add an interpretation merely to explain what the reader should feel.
+
+VERBS CARRY THE WEIGHT:
+- Prefer precise, active verbs over weak "to be" constructions.
+- Show what the subject does: breaks, holds, tears, shields, builds, turns, carries, resists, or remains.
+- Do not replace a factual transcript statement with a stronger verb that changes its meaning.
+- When no actor or action exists in the transcript, do not invent one.
+
+CADENCE:
+- Vary sentence length and sentence openings deliberately.
+- Do not allow three consecutive sentences to share the same shape and approximate length.
+- Break rhythmic patterns with purpose, not with random fragments.
+- Use short sentences to land a supported point, not to create artificial drama.
+- Keep the prose natural when read aloud.
+
+STAKES:
+- Make the significance of each section felt through a concrete consequence, pressure, cost, choice, loss, action, or calling present in the transcript.
+- Do not write "this is important" or explain that the reader should care.
+- Do not invent a modern application or personal consequence.
+- Let the transcript's own stakes create the urgency.
+
+SOURCE-FAITHFUL CRAFT:
+- Improve structure, rhythm, clarity, and force without adding content.
+- Every sentence must remain supported by the provided transcript excerpts.
+- Prose polish may clarify or compress an idea, but it may not expand, complete, reinterpret, or apply the idea.
+- When stronger prose would require unsupported material, write less.`;
+
 export const PREMIUM_BOOK_STYLE_RULES = `PREMIUM BOOK STYLE STANDARDS:
 
 STYLISTIC LIBERTY — WHAT YOU OWN:

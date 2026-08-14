@@ -3,7 +3,7 @@ import { generateObject, generateText } from "ai";
 import { z } from "zod";
 import { deepSeekModel } from "@/lib/ai-providers";
 import { WriteSectionRequestSchema } from "@/lib/schemas/ebook";
-import { PREMIUM_BOOK_STYLE_RULES, READER_NORMALIZATION_RULES, SOURCE_LOCK_RULES } from "@/lib/editorial-style-bible";
+import { PREMIUM_BOOK_STYLE_RULES, PROSE_MASTERY_RULES, READER_NORMALIZATION_RULES, SOURCE_LOCK_RULES } from "@/lib/editorial-style-bible";
 import { stripAudienceLanguage } from "@/lib/editorial-style-bible";
 
 export const runtime = "nodejs";
@@ -66,6 +66,8 @@ async function fallbackSectionBody(input: z.infer<typeof WriteSectionRequestSche
 ${SOURCE_LOCK_RULES}
 
 ${READER_NORMALIZATION_RULES}
+
+${PROSE_MASTERY_RULES}
 
 ${PREMIUM_BOOK_STYLE_RULES}
 
@@ -853,7 +855,7 @@ SCRIPTURE EXCEPTION: Skip rule NEVER applies to Bible verses. Include every scri
 ${isAbsoluteFirstSection ? "" : "\nTRANSITIONAL OPENING: Open with \"Having seen…\", \"Building on…\", \"Since we established…\""}`
       : "";
 
-    const deduplicatedSystem = `${EDITORIAL_SYSTEM}${voiceDnaBlock}${authorConfigBlock}${readabilityBlock}${coreThesisBlock}${usedIllustrationsBlock}${primaryTranslationBlock}${alreadyQuotedBlock}${dedupBlock}`;
+    const deduplicatedSystem = `${EDITORIAL_SYSTEM}${voiceDnaBlock}${authorConfigBlock}${readabilityBlock}${coreThesisBlock}${usedIllustrationsBlock}${primaryTranslationBlock}${alreadyQuotedBlock}${PROSE_MASTERY_RULES}${dedupBlock}`;
 
     const { object } = await generateObject({
       model: deepSeekModel,
