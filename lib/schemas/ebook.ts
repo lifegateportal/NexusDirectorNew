@@ -203,6 +203,12 @@ export const ChapterPlanRequestSchema = z.object({
   nextChapterTitle: z.string().optional(),
   coreThesis: z.string().optional(),
   voiceDNA: VoiceDNASchema.optional(),
+  // Angles owned by other chapters, so this chapter references instead of re-developing them.
+  chapterOwnershipMap: z.array(z.object({
+    chapterNumber: z.number().int(),
+    chapterTitle: z.string().default(""),
+    sectionHeadings: z.array(z.string()).default([]),
+  })).default([]),
   alreadyCoveredPoints: z.array(z.string()).default([]),
   priorSectionsSample: z.array(z.string()).default([]),
   sections: z.array(ChapterPlanSectionInputSchema),

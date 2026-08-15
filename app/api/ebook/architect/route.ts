@@ -291,6 +291,7 @@ SECTION HEADING RULES:
 - FORBIDDEN: any heading that ends with a preposition ("to", "our", "the", "in", "for", "on"), a conjunction ("and", "but", "or"), or a pronoun without its noun ("it", "them", "their", "its").
 - GOOD: "Prayer Reveals Hidden Glory" | "Moses Held the Nation by Prayer" | "The Righteous Life Powers Prayer"
 - BAD: "Pray until you are no longer" (dangling) | "You need a Joshua 2.0 to" (dangling) | "When we open up our" (dangling) | "Is any among you afflicted? Let" (question fragment)
+- SERIES DISTINCTNESS: This chapter is one message inside a series that keeps returning to shared themes. When a segment restates a theme the series revisits, the heading must name the specific advance THIS message makes on it, never the shared theme by itself. Two messages that both touch a theme must not produce two headings that read the same.
 
 STRUCTURE RULES:
 - Produce exactly 3–5 sections
@@ -310,6 +311,93 @@ VOICE TONE: ${voiceDNATone}
 ${transcriptBlock}`,
   });
   return object;
+}
+
+// ── Cross-chapter heading reconciliation ─────────────────────────────────────
+// Chapters are architected in parallel and cannot see each other's headings, so a
+// recurring series theme can yield near-identical headings in two chapters. Only the
+// later chapter's heading is rewritten; segment ownership is never reassigned.
+const HeadingRewriteSchema = z.object({ heading: z.string().default("") });
+
+const MAX_HEADING_RECONCILIATIONS = 6;
+
+async function reconcileCrossChapterHeadings(
+  chapters: z.infer<typeof MinimalArchitectureSchema>["chapters"],
+  segmentMap: Record<string, { topic: string; keyPoints?: string[] }>,
+): Promise<string[]> {
+  const changes: string[] = [];
+  const owned: Array<{ chapterNum: number; heading: string }> = [];
+
+  for (const chapter of chapters) {
+    for (const section of chapter.sections ?? []) {
+      const heading = (section.heading ?? "").trim();
+      if (!heading) continue;
+
+      const collision = owned.find(
+        (prev) =>
+          prev.chapterNum !== chapter.number &&
+          sectionKeywordOverlap(prev.heading, heading) >= ARCHITECT_OVERLAP_THRESHOLD
+      );
+
+      const sourceBlock = (section.sourceSegmentIds ?? [])
+        .map((id) => segmentMap[id])
+        .filter(Boolean)
+        .map((seg) => `TOPIC: ${seg.topic}\nKEY POINTS:\n${(seg.keyPoints ?? []).map((p) => `  • ${p}`).join("\n")}`)
+        .join("\n\n");
+
+      if (!collision || !sourceBlock || changes.length >= MAX_HEADING_RECONCILIATIONS) {
+        owned.push({ chapterNum: chapter.number, heading });
+        continue;
+      }
+
+      let resolved = heading;
+      try {
+        const { object } = await generateObject({
+          model: deepSeekReasonerModel,
+          schema: HeadingRewriteSchema,
+          mode: "json",
+          temperature: 1,
+          maxTokens: 800,
+          system: `You are a structural editor removing duplicate section headings from a book built out of a sermon series.
+
+A section heading in a later chapter repeats an angle an earlier chapter already owns. Rewrite ONLY the later heading so it names the specific advance this section makes.
+
+RULES:
+- 4–8 words. Title case. No punctuation at the end.
+- Complete, self-contained phrase. Never end with "to", "our", "the", "in", "for", "on", "and", "but", "or", "let", or "a".
+- Banned prefixes: Introduction, Intro, Overview, Opening, Summary, Conclusion, Part, Chapter, Section.
+- Build the heading only from this section's own segment topics and key points.
+- Do not reuse the distinctive words of the heading it collides with.
+- If the source material supports only the same angle, return the narrowest accurate heading it does support.
+
+${SOURCE_LOCK_RULES}`,
+          prompt: `ALREADY OWNED BY EARLIER CHAPTERS (do not repeat these angles):
+${owned.map((o) => `• Ch${o.chapterNum}: "${o.heading}"`).join("\n")}
+
+HEADING TO REPLACE (Chapter ${chapter.number}, Section ${section.sectionNumber}): "${heading}"
+IT COLLIDES WITH: Chapter ${collision.chapterNum} "${collision.heading}"
+
+THIS SECTION'S SOURCE MATERIAL:
+${sourceBlock}`,
+        });
+
+        const rewritten = (object.heading ?? "").trim();
+        if (rewritten && sectionKeywordOverlap(collision.heading, rewritten) < ARCHITECT_OVERLAP_THRESHOLD) {
+          section.heading = rewritten;
+          resolved = rewritten;
+          changes.push(
+            `Ch${chapter.number} §${section.sectionNumber}: "${heading}" → "${rewritten}" (collided with Ch${collision.chapterNum} "${collision.heading}")`
+          );
+        }
+      } catch {
+        // Keep the original heading; reconciliation is best-effort and never blocks the build.
+      }
+
+      owned.push({ chapterNum: chapter.number, heading: resolved });
+    }
+  }
+
+  return changes;
 }
 
 function fallbackArchitecture(input: z.infer<typeof ArchitectRequestSchema>) {
@@ -606,6 +694,11 @@ This content is a sermon series. The author's preaching sequence IS the book's s
       } // end else
     } catch {
       minimal = fallbackArchitecture(input);
+    }
+
+    const headingReconciliations = await reconcileCrossChapterHeadings(minimal.chapters ?? [], segmentMap);
+    if (headingReconciliations.length > 0) {
+      console.warn("[architect] Cross-chapter heading reconciliation:", headingReconciliations);
     }
 
     const normalized = normalizeArchitecture(minimal, input);

@@ -79,7 +79,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const { chapterNumber, chapterTitle, sections, nextChapterTitle, coreThesis, voiceDNA, alreadyCoveredPoints, priorSectionsSample } = input;
+  const { chapterNumber, chapterTitle, sections, nextChapterTitle, coreThesis, voiceDNA, alreadyCoveredPoints, priorSectionsSample, chapterOwnershipMap } = input;
 
   // ── Build concept ownership manifest ────────────────────────────────────────
   // List every section's heading and key points together so the planner knows
@@ -100,6 +100,10 @@ export async function POST(req: NextRequest) {
   // ── Dedup signal blocks ──────────────────────────────────────────────────────
   const priorChapterBlock = alreadyCoveredPoints.length > 0
     ? `\n\n════════════════════════════════════════════\nPRIOR CHAPTERS — HARD SKIP (already written)\n════════════════════════════════════════════\nThese concepts, arguments, and points have already been written in earlier chapters. Do NOT plan ANY paragraph in ANY section of this chapter that re-introduces, re-defines, or re-explains them:\n${alreadyCoveredPoints.map((p) => `• ${p}`).join("\n")}`
+    : "";
+
+  const ownershipBlock = chapterOwnershipMap.length > 0
+    ? `\n\n════════════════════════════════════════════\nBOOK-WIDE CHAPTER OWNERSHIP MAP\n════════════════════════════════════════════\nEvery chapter below already OWNS the angles named by its section headings. This chapter may reference them in a single clause, but must never re-introduce, re-define, or re-develop them. Where this chapter's transcript revisits one of those angles, plan the paragraph around the specific advance THIS chapter makes on it.\n${chapterOwnershipMap.map((c) => `• Chapter ${c.chapterNumber} "${c.chapterTitle}": ${c.sectionHeadings.join(" | ")}`).join("\n")}`
     : "";
 
   const coreThesisBlock = coreThesis
@@ -159,7 +163,7 @@ You MAY assign excerpts non-monotonically:
 
 This allows proper handling of teaching structures where the speaker introduces multiple points, then circles back to develop each one.
 
-Each paragraph plan entry MUST list supportedExcerptNumbers that belong to THIS section only. No excerpt number may appear in two different sections' plans.${priorChapterBlock}${coreThesisBlock}${voiceDnaLine}${chapterBoundaryBlock}
+Each paragraph plan entry MUST list supportedExcerptNumbers that belong to THIS section only. No excerpt number may appear in two different sections' plans.${priorChapterBlock}${ownershipBlock}${coreThesisBlock}${voiceDnaLine}${chapterBoundaryBlock}
 
 ${SOURCE_LOCK_RULES}
 ${READER_NORMALIZATION_RULES}`;

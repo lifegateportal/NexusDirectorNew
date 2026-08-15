@@ -3298,6 +3298,19 @@ export function EbookPipeline({
                     })(),
                     coreThesis: contentMap.coreThesis || undefined,
                     voiceDNA,
+                    // Angles owned by every other chapter, so recurring series themes are
+                    // referenced rather than re-developed here.
+                    chapterOwnershipMap: (() => {
+                      const byChapter = new Map<number, { chapterNumber: number; chapterTitle: string; sectionHeadings: string[] }>();
+                      for (const a of assignments) {
+                        if (a.chapterNumber === assignment.chapterNumber) continue;
+                        const entry = byChapter.get(a.chapterNumber)
+                          ?? { chapterNumber: a.chapterNumber, chapterTitle: a.chapterTitle, sectionHeadings: [] };
+                        entry.sectionHeadings.push(a.heading);
+                        byChapter.set(a.chapterNumber, entry);
+                      }
+                      return [...byChapter.values()].sort((x, y) => x.chapterNumber - y.chapterNumber);
+                    })(),
                     priorSectionsSample: buildProseSampleForDedup(assignment.chapterNumber),
                     // Feed prior-chapter coverage into the planner's PRIOR CHAPTERS HARD SKIP block.
                     // Previously [] meant the planner had zero knowledge of what earlier chapters
