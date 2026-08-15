@@ -4,7 +4,7 @@ import { z } from "zod";
 import { deepSeekReasonerModel, deepSeekModel } from "@/lib/ai-providers";
 import { EbookManifestSchema, BackMatterSchema } from "@/lib/schemas/ebook";
 import type { BackMatter } from "@/lib/schemas/ebook";
-import { SOURCE_LOCK_RULES } from "@/lib/editorial-style-bible";
+import { SOURCE_LOCK_RULES, READER_NORMALIZATION_RULES, PREMIUM_BOOK_STYLE_RULES } from "@/lib/editorial-style-bible";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -179,8 +179,8 @@ Generate the glossary, reading group guide, and recommended resources.`;
       prompt: backmatterPrompt,
     });
     object = res.object;
-  } catch {
-    // R1 failed — fall back to V3 Pro
+  } catch (r1Err) {
+    console.error("[backmatter] R1 failed, falling back to V3:", r1Err);
     try {
       const res = await generateObject({
         model: deepSeekModel,
