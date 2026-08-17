@@ -30,88 +30,74 @@ THE CORRECT RESPONSE TO THIN SOURCE MATERIAL: Write less. A section with three a
 
 WHAT YOU MAY DO: Improve sentence structure, word choice, rhythm, and paragraph flow. Re-order sentences within an excerpt for logical clarity. Smooth transitions between ideas — using only the ideas present in the transcript. You own the presentation; the preacher owns every idea.`;
 
-export const PROSE_MASTERY_RULES = `PROSE MASTERY: STYLE ONLY
+export const PROSE_MASTERY_RULES = `PROSE MASTERY: THE NOTEBOOKLM STANDARD (STYLE ONLY)
 
-These rules control presentation, not content. SOURCE-LOCK, SECTION SCOPE,
+These rules control presentation, not content. SOURCE-LOCK, SECTION SCOPE, 
 TRANSCRIPT SEQUENCE, and DUPLICATION rules always take priority.
 
-SOURCE-FAITHFUL CRAFT:
-- Improve clarity, structure, rhythm, precision, and force without adding content.
-- Before keeping a sentence, verify that its claim, emphasis, image, consequence,
-	and emotional force are supported by the provided transcript excerpts.
-- If a sentence sounds stronger than the source supports, weaken it or remove it.
-- When a polished sentence would require an inference, application, example, or
-	theological extension, write less.
-- Do not make the prose more specific by inventing detail. Use the speaker's own
-	names, places, actions, numbers, images, and quoted language when available.
+RELATIONAL AUTHORITY (THE EXPERT GUIDE):
+- Write with the warmth, focus, and absolute clarity of a master teacher speaking 
+  to a smart friend across a table.
+- Achieve high semantic density with low cognitive load: express deep theological or 
+  textual concepts in simple, frictionless sentences.
+- Strip away academic padding, religious jargon (unless intrinsic to the speaker), 
+  and formal distance. Be highly authoritative but intimately accessible.
 
-CONCRETE BEFORE ABSTRACT:
-- Prefer a supported action, image, event, or stated consequence over generic
-	explanation.
-- An abstract statement does not need a concrete example when the transcript
-	provides none. Keep it brief and faithful instead of manufacturing an anchor.
-- Do not explain an idea twice: once in abstract language and again in slightly
-	different abstract language.
-- Delete sentences that merely repeat, intensify, or summarize a point already made.
+SEAMLESS SYNTHESIS (HIDE THE SEAMS):
+- Never write "The speaker notes," "Another point is," "We also see," or "Later 
+  in the passage."
+- Weave fragmented transcript points into a single, continuous narrative arc. One 
+  idea must dissolve naturally into the next without mechanical joints or bullet-point 
+  structures in the prose.
+- When integrating a quote, drop it directly into the flow of the sentence without 
+  heavy theatrical setup (e.g., instead of "As he said, 'love is patient'", write 
+  "Because love is patient, the response must change...").
 
-PARAGRAPH MOVEMENT:
-- Each paragraph should develop an idea rather than restate it.
-- Where the transcript contains a progression, contrast, story, argument, or
-	consequence, let the paragraph move through that development.
-- A paragraph does not need an artificial setup, twist, or dramatic landing.
-- End at the natural point supported by the source. Do not add a concluding
-	interpretation merely to make the paragraph feel complete.
-- Never use a paragraph transition to introduce the next section's subject early.
+THE SCRIPTURES AS TEACHING MATERIAL:
+- You are turning a sermon into a book. Treat all scripture references as central, 
+  authoritative teaching material.
+- State scriptures as-is. Do not soften, summarize away, or heavily paraphrase the 
+  biblical text. Let the scripture stand clear and distinct.
+- While the prose should flow seamlessly, the scripture itself must anchor the 
+  teaching with weight and precision.
 
-IMAGERY:
-- Use the speaker's own image when it clarifies or carries the point.
-- Prefer one supported image over several decorative images.
-- Do not add, extend, combine, or reinterpret metaphors beyond what the speaker said.
-- Once an image has made its point, stop explaining it.
+AUDIO-FIRST PACING:
+- Write for the "inner ear." If a sentence requires the reader to pause or re-read 
+  to understand its grammar, rewrite and simplify it.
+- Use strategic cadence to build momentum: start with a steady explanation, accelerate 
+  with shorter factual claims, and land with a definitive, resonant conclusion.
+- Keep the rhythm natural. Do not vary sentence structure merely to satisfy a pattern, 
+  and use fragments only when the transcript's voice clearly supports them.
 
-PRECISION AND VERBS:
-- Prefer precise verbs and concrete nouns when the transcript supports them.
-- Do not replace a neutral factual statement with a stronger verb that changes
-	its meaning.
-- Do not invent an actor, motive, action, consequence, or emotional response.
-- Remove empty constructions and filler when doing so preserves meaning.
+ZERO-FRICTION EMPATHY & STAKES:
+- When the transcript identifies a struggle, doubt, or human weakness, frame it as 
+  a shared human reality, not a distant observation.
+- Address the tension directly and simply. Do not add melodrama, urgency, or 
+  inspiration that the transcript itself does not contain.
 
-RESTRAINT:
-- Do not write "This means that," "What this shows is," "In other words,"
-	"This is important," or similar explanatory framing.
-- Do not tell the reader what to feel, believe, notice, or apply unless the
-	transcript itself does so.
-- After a supported image, action, or landed claim, allow it to stand.
-- Do not add urgency, inspiration, comfort, warning, or application that the
-	transcript does not contain.
+CONCRETE ANCHORING:
+- Prefer a supported action, image, event, or stated consequence over generic explanation.
+- An abstract statement does not need a concrete example when the transcript provides none. 
+  Keep it brief and faithful instead of manufacturing an anchor.
+- Once an image or metaphor has made its point, stop explaining it.
 
-RHYTHM:
-- Keep the prose natural when read aloud.
-- Vary sentence length and openings when natural variation improves the passage.
-- Do not vary sentence structure merely to satisfy a pattern.
-- Use short sentences for clarity or emphasis, not artificial drama.
-- Do not use fragments unless the transcript's voice or the surrounding prose
-	clearly supports them.
+RESTRAINT AND COMPRESSION (NO PADDING):
+- Do not explain an idea twice. Delete sentences that merely repeat, intensify, or 
+  summarize a point already made in slightly different words.
+- Do not tell the reader what to feel, believe, notice, or apply unless the 
+  transcript itself does so explicitly.
+- Remove explanatory framing like "This means that," "What this shows is," or 
+  "This is important." Allow a landed claim to stand alone.
 
-SECTION INTEGRITY:
-- Develop only the assigned section's material.
-- Do not preview, summarize, or borrow the next section's argument.
-- Do not repeat a previous section's point unless the assigned source material
-	adds a distinct development.
-- Preserve the transcript's sequence unless a local sentence reorder improves
-	clarity without changing the argument's movement.
-
-FINAL STYLE CHECK:
+FINAL NOTEBOOKLM STYLE CHECK:
 Before returning the prose, remove:
-- repeated claims stated in different words;
+- mechanical transitions that announce what the reader has already understood;
 - generic explanation after a clear image or quote;
-- unsupported intensifiers;
-- decorative metaphors;
-- invented applications or consequences;
-- transitions that announce what the reader has already understood.
+- unsupported intensifiers or decorative metaphors;
+- inserted applications, consequences, or theological extensions.
 
-The final result should feel shaped, precise, and readable while remaining no more
-interpretive, specific, dramatic, or complete than the transcript itself.`;
+The final result should feel masterfully shaped, effortlessly readable, and completely 
+coherent, while remaining no more interpretive or specific than the original transcript.`;
 
 export const PREMIUM_BOOK_STYLE_RULES = `PREMIUM BOOK STYLE STANDARDS:
 
