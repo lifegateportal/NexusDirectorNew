@@ -32,58 +32,86 @@ WHAT YOU MAY DO: Improve sentence structure, word choice, rhythm, and paragraph 
 
 export const PROSE_MASTERY_RULES = `PROSE MASTERY: STYLE ONLY
 
-These rules control presentation, not content. SOURCE-LOCK, SECTION SCOPE, TRANSCRIPT SEQUENCE, and DUPLICATION rules always take priority.
-
-SPECIFICITY OVER ABSTRACTION:
-- Every abstract claim must touch ground within two sentences through a name, number, place, action, or image drawn from the transcript.
-- If the transcript provides no concrete anchor, keep the claim brief.
-- Never invent an example, detail, consequence, application, or image to make the prose more specific.
-- Prefer the speaker's actual concrete details over generic explanation.
-
-THE PARAGRAPH TURN:
-- Each paragraph must move through a setup, a turn, and a landing.
-- Do not state one idea flatly and repeat it in different words.
-- The final sentence should leave the reader somewhere different from where the paragraph began.
-- The turn must come from the transcript's own argument, story, image, or consequence.
-- Do not use a paragraph turn to introduce the next section's subject.
-
-IMAGERY DISCIPLINE:
-- Prefer one fresh image the speaker actually used over several generic images.
-- Never add an image that is absent from the transcript.
-- Do not mix metaphors within a paragraph.
-- Carry one controlling image only as long as it remains natural, then release it.
-- Do not extend an image into a claim the speaker did not make.
-
-RESTRAINT:
-- After a vivid image or a landed point, stop explaining it.
-- Let the image, action, or claim carry its own weight.
-- Never write "This means that...", "What this shows is...", or "In other words...".
-- Do not add an interpretation merely to explain what the reader should feel.
-
-VERBS CARRY THE WEIGHT:
-- Prefer precise, active verbs over weak "to be" constructions.
-- Show what the subject does: breaks, holds, tears, shields, builds, turns, carries, resists, or remains.
-- Do not replace a factual transcript statement with a stronger verb that changes its meaning.
-- When no actor or action exists in the transcript, do not invent one.
-
-CADENCE:
-- Vary sentence length and sentence openings deliberately.
-- Do not allow three consecutive sentences to share the same shape and approximate length.
-- Break rhythmic patterns with purpose, not with random fragments.
-- Use short sentences to land a supported point, not to create artificial drama.
-- Keep the prose natural when read aloud.
-
-STAKES:
-- Make the significance of each section felt through a concrete consequence, pressure, cost, choice, loss, action, or calling present in the transcript.
-- Do not write "this is important" or explain that the reader should care.
-- Do not invent a modern application or personal consequence.
-- Let the transcript's own stakes create the urgency.
+These rules control presentation, not content. SOURCE-LOCK, SECTION SCOPE,
+TRANSCRIPT SEQUENCE, and DUPLICATION rules always take priority.
 
 SOURCE-FAITHFUL CRAFT:
-- Improve structure, rhythm, clarity, and force without adding content.
-- Every sentence must remain supported by the provided transcript excerpts.
-- Prose polish may clarify or compress an idea, but it may not expand, complete, reinterpret, or apply the idea.
-- When stronger prose would require unsupported material, write less.`;
+- Improve clarity, structure, rhythm, precision, and force without adding content.
+- Before keeping a sentence, verify that its claim, emphasis, image, consequence,
+	and emotional force are supported by the provided transcript excerpts.
+- If a sentence sounds stronger than the source supports, weaken it or remove it.
+- When a polished sentence would require an inference, application, example, or
+	theological extension, write less.
+- Do not make the prose more specific by inventing detail. Use the speaker's own
+	names, places, actions, numbers, images, and quoted language when available.
+
+CONCRETE BEFORE ABSTRACT:
+- Prefer a supported action, image, event, or stated consequence over generic
+	explanation.
+- An abstract statement does not need a concrete example when the transcript
+	provides none. Keep it brief and faithful instead of manufacturing an anchor.
+- Do not explain an idea twice: once in abstract language and again in slightly
+	different abstract language.
+- Delete sentences that merely repeat, intensify, or summarize a point already made.
+
+PARAGRAPH MOVEMENT:
+- Each paragraph should develop an idea rather than restate it.
+- Where the transcript contains a progression, contrast, story, argument, or
+	consequence, let the paragraph move through that development.
+- A paragraph does not need an artificial setup, twist, or dramatic landing.
+- End at the natural point supported by the source. Do not add a concluding
+	interpretation merely to make the paragraph feel complete.
+- Never use a paragraph transition to introduce the next section's subject early.
+
+IMAGERY:
+- Use the speaker's own image when it clarifies or carries the point.
+- Prefer one supported image over several decorative images.
+- Do not add, extend, combine, or reinterpret metaphors beyond what the speaker said.
+- Once an image has made its point, stop explaining it.
+
+PRECISION AND VERBS:
+- Prefer precise verbs and concrete nouns when the transcript supports them.
+- Do not replace a neutral factual statement with a stronger verb that changes
+	its meaning.
+- Do not invent an actor, motive, action, consequence, or emotional response.
+- Remove empty constructions and filler when doing so preserves meaning.
+
+RESTRAINT:
+- Do not write "This means that," "What this shows is," "In other words,"
+	"This is important," or similar explanatory framing.
+- Do not tell the reader what to feel, believe, notice, or apply unless the
+	transcript itself does so.
+- After a supported image, action, or landed claim, allow it to stand.
+- Do not add urgency, inspiration, comfort, warning, or application that the
+	transcript does not contain.
+
+RHYTHM:
+- Keep the prose natural when read aloud.
+- Vary sentence length and openings when natural variation improves the passage.
+- Do not vary sentence structure merely to satisfy a pattern.
+- Use short sentences for clarity or emphasis, not artificial drama.
+- Do not use fragments unless the transcript's voice or the surrounding prose
+	clearly supports them.
+
+SECTION INTEGRITY:
+- Develop only the assigned section's material.
+- Do not preview, summarize, or borrow the next section's argument.
+- Do not repeat a previous section's point unless the assigned source material
+	adds a distinct development.
+- Preserve the transcript's sequence unless a local sentence reorder improves
+	clarity without changing the argument's movement.
+
+FINAL STYLE CHECK:
+Before returning the prose, remove:
+- repeated claims stated in different words;
+- generic explanation after a clear image or quote;
+- unsupported intensifiers;
+- decorative metaphors;
+- invented applications or consequences;
+- transitions that announce what the reader has already understood.
+
+The final result should feel shaped, precise, and readable while remaining no more
+interpretive, specific, dramatic, or complete than the transcript itself.`;
 
 export const PREMIUM_BOOK_STYLE_RULES = `PREMIUM BOOK STYLE STANDARDS:
 
