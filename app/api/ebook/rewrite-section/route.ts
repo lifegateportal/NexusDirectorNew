@@ -4,6 +4,7 @@ import { z } from "zod";
 import { deepSeekModel } from "@/lib/ai-providers";
 import { SectionAssignmentSchema } from "@/lib/schemas/ebook";
 import { PREMIUM_BOOK_STYLE_RULES, SOURCE_LOCK_RULES, READER_NORMALIZATION_RULES } from "@/lib/editorial-style-bible";
+import { hydrateScriptureQuotes } from "@/lib/scripture-service";
 
 export const runtime = "nodejs";
 export const maxDuration = 180;
@@ -56,7 +57,23 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: parsed.error.message }, { status: 400 });
   }
 
-  const { mode, assignment, currentBody, instruction, includeExcerptNumbers, paragraphIndex, authorConfig } = parsed.data;
+  const { mode, assignment: unverifiedAssignment, currentBody, instruction, includeExcerptNumbers, paragraphIndex, authorConfig } = parsed.data;
+  let assignment = unverifiedAssignment;
+  try {
+    assignment = {
+      ...assignment,
+      quotes: await hydrateScriptureQuotes({
+        quotes: assignment.quotes,
+        sourceTexts: assignment.transcriptExcerpts,
+        defaultTranslation: assignment.primaryTranslation,
+      }),
+    };
+  } catch (error) {
+    return NextResponse.json({
+      error: "Scripture verification failed",
+      details: error instanceof Error ? error.message : "Live Scripture provider unavailable",
+    }, { status: 502 });
+  }
   const includeSet = new Set(includeExcerptNumbers);
   
   // Detect additive vs full rewrite mode
@@ -99,12 +116,12 @@ LONG BLOCK (40+ words — mandatory blockquote, no quotation marks):
 
 CRITICAL SCRIPTURE RULES:
 • Reference ALWAYS ends with translation in parentheses: (NIV), (KJV), (ESV)
-• Reference ALWAYS preceded by em-dash: —
+• Place the reference on its own final blockquote line
 • Block quotes NEVER use quotation marks around verse text
-• Reproduce scripture EXACTLY as the speaker quoted it. Never paraphrase scripture.
+• Reproduce scripture EXACTLY from the VERIFIED SCRIPTURES supplied below. Never reconstruct verse text from memory.
 • After scripture quotes, ADVANCE the argument—never restate what the verse just said.
 • Quote each scripture ONCE per section. Subsequent references use shorthand: "As Jesus said in John 15:5..."
-• Every scripture must complete TEXT → TRUTH → APPLICATION within 2-3 paragraphs.
+• Develop only the truth or application the speaker explicitly draws from the text.
 `;
 
   // Boundary instructions for additive mode
@@ -187,6 +204,17 @@ ${usedScriptures.map(q => `• ${q.reference} — DO NOT REPRODUCE TEXT`).join("
 `
     : "";
 
+  const verifiedScriptureBlock = assignment.quotes.some((quote) => quote.type === "scripture")
+    ? `
+VERIFIED SCRIPTURES — USE THIS EXACT LIVE-FETCHED TEXT
+
+${assignment.quotes
+  .filter((quote) => quote.type === "scripture")
+  .map((quote) => `• ${quote.reference} (${quote.translation}): "${quote.text}" [verified: ${quote.verificationSource ?? "live provider"}]`)
+  .join("\n")}
+`
+    : "";
+
   const rewritePrompt = [
     `CHAPTER ${assignment.chapterNumber}: ${assignment.chapterTitle}`,
     `SECTION ${assignment.sectionNumber}: ${assignment.heading}`,
@@ -205,6 +233,7 @@ ${usedScriptures.map(q => `• ${q.reference} — DO NOT REPRODUCE TEXT`).join("
     primaryTranslationBlock,
     scripturePositionsBlock,
     scriptureDeduplicationBlock,
+    verifiedScriptureBlock,
     "TRANSCRIPT EXCERPTS:",
     excerptBlock,
   ]

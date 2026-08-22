@@ -1,8 +1,9 @@
 import type { ChapterDraft, ContentMap, FrontBackMatter } from "@/lib/schemas/ebook";
 import { NON_BOOK_CUE_RE } from "@/lib/editorial-style-bible";
+import { claimSimilarity, extractClaimCandidates } from "@/lib/idea-ownership";
 
 export type QualityIssue = {
-  code: "AUDIENCE_LANGUAGE" | "LOW_CONTENT_OVERLAP" | "SHORT_SECTION" | "EMPTY_FRONTMATTER" | "REDUNDANT_RECAP" | "EM_DASH_FOUND" | "AI_SIGNATURE_WORD" | "PASSIVE_VOICE_HIGH" | "THEMATIC_DRIFT" | "ORPHAN_PARAGRAPH" | "SAME_OPENER_RUN";
+  code: "AUDIENCE_LANGUAGE" | "LOW_CONTENT_OVERLAP" | "SHORT_SECTION" | "EMPTY_FRONTMATTER" | "REDUNDANT_RECAP" | "EM_DASH_FOUND" | "AI_SIGNATURE_WORD" | "PASSIVE_VOICE_HIGH" | "THEMATIC_DRIFT" | "ORPHAN_PARAGRAPH" | "SAME_OPENER_RUN" | "DUPLICATE_IDEA";
   severity: "warn" | "error";
   message: string;
 };
@@ -91,10 +92,36 @@ export function evaluateBookQuality(input: {
   const sourceCorpus = input.contentMap.segments.map((s) => s.rawText).join("\n\n");
   const sourceTokens = tokenize(sourceCorpus);
   const seenRecapSentences = new Set<string>();
+  const acceptedClaims: Array<{ claim: string; chapterNumber: number; sectionNumber: number }> = [];
 
   for (const chapter of input.chapters) {
     for (const section of chapter.sections) {
       const body = section.body ?? "";
+      const sectionClaims = section.claimLedger?.length
+        ? section.claimLedger
+        : extractClaimCandidates(body);
+      for (const candidate of sectionClaims) {
+        let strongest: { claim: string; chapterNumber: number; sectionNumber: number; similarity: number } | null = null;
+        for (const prior of acceptedClaims) {
+          const similarity = claimSimilarity(candidate.claim, prior.claim);
+          if (similarity >= 0.8 && (!strongest || similarity > strongest.similarity)) {
+            strongest = { ...prior, similarity };
+          }
+        }
+        if (strongest) {
+          issues.push({
+            code: "DUPLICATE_IDEA",
+            severity: "error",
+            message: `Chapter ${chapter.number} section ${section.sectionNumber} repeats a claim owned by Chapter ${strongest.chapterNumber} section ${strongest.sectionNumber} (${Math.round(strongest.similarity * 100)}% match).`,
+          });
+          score -= 12;
+        }
+        acceptedClaims.push({
+          claim: candidate.claim,
+          chapterNumber: chapter.number,
+          sectionNumber: section.sectionNumber,
+        });
+      }
       const cueHits = body.match(NON_BOOK_CUE_RE)?.length ?? 0;
       if (cueHits > 0) {
         issues.push({

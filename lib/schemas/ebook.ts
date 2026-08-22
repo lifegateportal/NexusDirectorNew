@@ -9,6 +9,10 @@ export const QuoteSchema = z.object({
   translation: z.string(),     // "NIV" | "KJV" | "ESV" | "" for non-scripture
   type: z.enum(["scripture", "quote", "proverb"]),
   isBlockQuote: z.boolean(),   // true when 40+ words (Chicago Manual of Style)
+  verified: z.boolean().default(false),
+  verificationSource: z.string().optional(),
+  verificationUrl: z.string().url().optional(),
+  verifiedAt: z.string().datetime().optional(),
 });
 
 // ─── Voice DNA ───────────────────────────────────────────────────────────────
@@ -142,6 +146,13 @@ export const SectionAssignmentSchema = z.object({
   consumedSegmentIds: z.array(z.string()).default([]),  // segment IDs fully consumed by earlier sections — excerpts filtered before reaching LLM
   // ── Upgrade 5: Canonical concept ownership map ───────────────────────────
   conceptOwnershipMap: z.record(z.string(), z.number()).default({}), // concept label → chapter number that owns it
+  ideaOwnershipRegistry: z.array(z.object({
+    id: z.string(),
+    label: z.string(),
+    chapterNumber: z.number().int(),
+    sectionNumber: z.number().int(),
+    sourceSegmentIds: z.array(z.string()).default([]),
+  })).default([]),
   // ── Upgrade 7: Tiered quote dedup ────────────────────────────────────────
   forbiddenVerseTexts: z.array(z.string()).default([]), // exact verse texts already quoted in full — hard ban on re-printing
   allowedInlineOnly: z.array(z.string()).default([]),   // refs where only a brief inline mention is allowed (no full re-quote)
@@ -233,6 +244,10 @@ export const SectionDraftSchema = z.object({
   heading: z.string().default(""),
   body: z.string().default(""),
   wordCount: z.number().default(0),
+  claimLedger: z.array(z.object({
+    claim: z.string(),
+    excerptNumbers: z.array(z.number().int().positive()).default([]),
+  })).optional(),
   status: z.enum(["pending", "writing", "complete", "failed"]).default("pending"),
 });
 

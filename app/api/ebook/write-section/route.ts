@@ -5,6 +5,7 @@ import { deepSeekModel } from "@/lib/ai-providers";
 import { WriteSectionRequestSchema } from "@/lib/schemas/ebook";
 import { PREMIUM_BOOK_STYLE_RULES, PROSE_MASTERY_RULES, READER_NORMALIZATION_RULES, SOURCE_LOCK_RULES } from "@/lib/editorial-style-bible";
 import { stripAudienceLanguage } from "@/lib/editorial-style-bible";
+import { hydrateScriptureQuotes } from "@/lib/scripture-service";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -375,10 +376,9 @@ const EDITORIAL_SYSTEM = `You are an elite ghostwriter transforming raw sermon t
 
 ═══ PROSE QUALITY (enforce on every paragraph) ═══
 RHYTHM & STRUCTURE:
-• Vary sentence length deliberately. Longest must be 2× shortest. Short punch after long explanation.
-• Every 3+ sentence paragraph needs one complex sentence with "although," "because," "while," "since," "which," or "who."
-• No 3 consecutive sentences may start with the same word. Adjacent paragraphs must start differently.
-• One-sentence paragraphs only for fragments ≤12 words. Longer single sentences need follow-up development.
+• Write for effortless comprehension when read aloud. Simplify any sentence that requires rereading.
+• Let sentence length and paragraph shape follow the teaching. Never manufacture variation to satisfy a pattern.
+• Give each paragraph one clear teaching advance. Stop when that advance is complete.
 
 WORD CHOICE & VOICE:
 • Concrete nouns, active verbs, precise language. Remove vague words and unnecessary adverbs.
@@ -388,7 +388,7 @@ WORD CHOICE & VOICE:
 
 ARGUMENT FLOW:
 • Each paragraph advances the argument. No restating prior points.
-• SHOW BEFORE TELL: Lead with story/example, then state the principle.
+• Preserve the speaker's order. Do not force a story-first structure when the sermon teaches differently.
 • No em dashes (—) anywhere. Use commas, colons, semicolons, or subordinate clauses instead.
 • After scripture quotes, ADVANCE the argument—never restate what the verse just said.
 
@@ -404,13 +404,14 @@ LONG BLOCK (40+ words—mandatory blockquote, no quotation marks):
 > — Book Chapter:Verse (Translation)
 
 CRITICAL RULES:
-• Reproduce scripture EXACTLY as the speaker quoted it. Never paraphrase scripture.
-• When a central passage anchors the section, place it as a standalone block near the opening—before explanatory words.
+• Reproduce scripture EXACTLY from the VERIFIED SCRIPTURES / QUOTES supplied in the prompt. Never reconstruct verse text from memory.
+• Preserve the verified translation label. If verified text is unavailable, use the reference only and do not supply verse wording.
+• Place a central passage where the speaker uses it in the argument. Do not move it earlier for dramatic effect.
 • No post-quote restatement. The sentence after scripture must advance, apply, or land an implication—not echo what was just said.
 • Include original Greek/Hebrew terms exactly as the speaker stated them: the Greek word *transliteration*, meaning "definition."
 • Quote each scripture ONCE per section. Subsequent references use shorthand only: "As Jesus said in John 15:5..."
 • Never add biblical background (historical setting, authorial intent, cultural context) unless the speaker explicitly stated it.
-• Every scripture must complete TEXT → TRUTH → APPLICATION within 2-3 paragraphs of the quotation.
+• Develop only the truth or application the speaker explicitly draws from the text. Do not force an application circuit.
 • Always include translation abbreviation: (NIV), (KJV), (ESV), etc.
 
 ═══ VOICE DNA ENFORCEMENT ═══
@@ -428,7 +429,7 @@ When Voice DNA is provided, you MUST:
 
 ═══ PARAGRAPH DISCIPLINE ═══
 • Return paragraphs as JSON array—each element is exactly ONE paragraph
-• One idea per paragraph, 3-5 sentences
+• One teaching advance per paragraph; use only as many sentences as it needs
 • New point/scripture/example = new array element
 • Never put two paragraphs in one element or split one across two
 
@@ -450,7 +451,28 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const { assignment } = input;
+  let assignment = input.assignment;
+  if (!assignment.assignedPlan?.length) {
+    return NextResponse.json({
+      error: "Source-backed paragraph plan required",
+      details: `Ch ${assignment.chapterNumber} §${assignment.sectionNumber} cannot be drafted without canonical excerpt ownership.`,
+    }, { status: 409 });
+  }
+  try {
+    assignment = {
+      ...assignment,
+      quotes: await hydrateScriptureQuotes({
+        quotes: assignment.quotes,
+        sourceTexts: assignment.transcriptExcerpts,
+        defaultTranslation: assignment.primaryTranslation,
+      }),
+    };
+  } catch (error) {
+    return NextResponse.json({
+      error: "Scripture verification failed",
+      details: error instanceof Error ? error.message : "Live Scripture provider unavailable",
+    }, { status: 502 });
+  }
   const authorConfig = input.authorConfig;
   const authorConfigBlock = (authorConfig?.instructions || authorConfig?.targetAudience)
     ? `\n\n════════════════════════════════════════════
@@ -463,10 +485,10 @@ AUTHOR BOOK CONFIGURATION (highest priority)
 READABILITY TARGET — ENFORCE BEFORE RETURNING
 ════════════════════════════════════════════
 Target Flesch-Kincaid Grade Level: 9–11. This means:
-• Average sentence length of 18–22 words across the section.
 • Vocabulary is precise and elevated, but not academic or dense.
-• Deliberate length variation: some sentences under 10 words (punch), some over 30 (explanation). Never five consecutive medium-length sentences.
-• After drafting, scan for any paragraph where all sentences are approximately the same length — break it with a short punch or a long explanatory sentence.`;
+• Prefer direct syntax and one clear relationship between ideas at a time.
+• Preserve necessary theological terms, then explain them only as the transcript does.
+• If a sentence feels engineered for rhythm rather than clarity, simplify it.`;
 
   // ── Upgrade 3: Book thesis threading ────────────────────────────────────
   const coreThesisBlock = assignment.coreThesis
@@ -474,7 +496,7 @@ Target Flesch-Kincaid Grade Level: 9–11. This means:
 BOOK'S CORE THESIS — THREAD THROUGH THIS SECTION
 ════════════════════════════════════════════
 "${assignment.coreThesis}"
-Every section you write must feel like it advances this thesis. Not by repeating it verbatim, but by adding a new dimension, a new piece of evidence, or a new application of it. If a paragraph has no traceable connection to this thesis, it is filler. Readers feel thesis-less sections as "padding" even if they can't name why.`
+Use this only as book-level orientation. Do not state, echo, or paraphrase it unless this section's assigned transcript material develops it directly.`
     : "";
 
   // ── Upgrade 4: Illustration / story dedup block ──────────────────────────
@@ -533,16 +555,11 @@ The following 3-word phrases appear too frequently across the sections already w
 ${overusedPhrases.map((p) => `• "${p}"`).join("\n")}`
     : "";
 
-  // ── Amendment 7: Diminishing Permission Rule ─────────────────────────────
-  // Section 1 in a chapter may introduce 3 new core concepts.
-  // Section 2 may introduce 2. Section 3+ may introduce only 1.
-  // This forces depth over breadth as the chapter builds.
-  const sectionIdx = assignment.sectionIndexInChapter ?? 0;
-  const maxNewConcepts = sectionIdx === 0 ? 3 : sectionIdx === 1 ? 2 : 1;
+  // The chapter planner, not section position, controls concept scope.
   const diminishingPermissionBlock = `\n\n════════════════════════════════════════════
-NEW CONCEPT CAP FOR THIS SECTION
+ASSIGNED IDEA SCOPE
 ════════════════════════════════════════════
-This is section ${sectionIdx + 1} within its chapter. You MAY introduce at most ${maxNewConcepts} new core concept${maxNewConcepts !== 1 ? "s" : ""} in this section — ideas the reader has NOT encountered yet anywhere in this book. Every additional paragraph must deepen, apply, or illustrate a concept already introduced (either earlier in this chapter, or in this section's own opening). Width is not the goal; depth is. A section that introduces ${maxNewConcepts + 1}+ new concepts will feel scattered and under-developed.`;
+Develop every source-backed idea assigned by this section's paragraph plan, and no others. Never deepen, apply, illustrate, or restate an idea owned by an earlier section merely to add length. If the assigned ideas are exhausted, stop writing.`;
 
   // ── Seq-A3: Argument-turn sequence enforcement block ─────────────────────
   const sequenceTurns = assignment.sequenceTurns ?? [];
@@ -682,6 +699,17 @@ The following concepts, section headings, and key points are OWNED BY OTHER CHAP
 ${foreignConcepts.map(([concept, chNum]) => `• Ch ${chNum} owns: "${concept}"`).join("\n")}`
     : "";
 
+  const foreignIdeas = (assignment.ideaOwnershipRegistry ?? []).filter(
+    (idea) => idea.chapterNumber !== assignment.chapterNumber || idea.sectionNumber !== assignment.sectionNumber
+  );
+  const exactOwnershipBlock = foreignIdeas.length > 0
+    ? `\n\n════════════════════════════════════════════
+CANONICAL IDEA OWNERSHIP — SECTION LEVEL
+════════════════════════════════════════════
+The ideas below have exact owners elsewhere in the book. Do not define, explain, illustrate, apply, or conclude them here. A brief reference is allowed only when this section's assigned plan explicitly requires it:
+${foreignIdeas.map((idea) => `• ${idea.id} belongs to Ch ${idea.chapterNumber} §${idea.sectionNumber}: "${idea.label}"`).join("\n")}`
+    : "";
+
   const nextSectionBlock = assignment.nextSectionHeading
     ? `\nFORWARD BRIDGE — STRICT LIMITS: The final sentence of this section may create forward reading momentum, but ONLY through an unresolved question, an open tension, or a logical implication that arises naturally from THIS section's own content. The next section is titled "${assignment.nextSectionHeading}" — use this ONLY as directional context for tone. You MUST NOT:
   • Preview, introduce, or summarize any content from that next section
@@ -709,14 +737,12 @@ HARD RULES for this section's close:
     : "";
 
   const hookBlock = assignment.sectionNumber === 1
-    ? `\nCHAPTER OPENER REQUIREMENT: This is the FIRST section of the chapter. The very first sentence must be a compelling hook — a bold provocative claim, a pointed question, or an immersive specific detail drawn directly from the transcript. Do not open with a general context-setting statement. Drop the reader immediately into the argument.\nHEADING ECHO BAN: The section heading is "${assignment.heading}". The first sentence of the body must NOT restate, echo, paraphrase, or summarise this heading — not even loosely. The heading is already displayed above; repeating it as the first sentence is a critical error. Begin with entirely new content from the transcript.`
+    ? `\nCHAPTER OPENER: Begin with the strongest natural entry point the transcript provides: a concrete detail, clear claim, question, scripture, or tension. Do not manufacture provocation.\nHEADING ECHO BAN: The section heading is "${assignment.heading}". The first sentence must add content rather than restate the heading.`
     : `\nHEADING ECHO BAN: The section heading is "${assignment.heading}". The first sentence of the body must NOT restate, echo, paraphrase, or summarise this heading. The heading is already displayed above. Begin immediately with the argument, scripture, or story from the transcript.`;
 
-  // ── S7: Chapter premise anchor ──────────────────────────────────────────
-  // First paragraph's opening sentence should echo (not quote) the chapter premise
-  // so the reader feels immediate orientation within the chapter's thesis.
+  // The premise is orientation, not required wording for every section opening.
   const chapterPremiseBlock = assignment.chapterPremise
-    ? `\n\nCHAPTER PREMISE (north star for this chapter):\n"${assignment.chapterPremise}"\nThe opening sentence of the FIRST paragraph of this section should echo the spirit of this premise — not quote it verbatim, but orient the reader toward the same central tension or claim. Subsequent paragraphs should build from it.`
+    ? `\n\nCHAPTER PREMISE (silent orientation only):\n"${assignment.chapterPremise}"\nDo not echo or restate this premise unless the assigned source material explicitly returns to it.`
     : "";
 
   const prompt = `Write the prose for this section of the ebook. Transform the transcript excerpts into polished written prose.
@@ -735,6 +761,7 @@ ${nextSectionBlock}
 ${chapterClosingBlock}
 ${hookBlock}
 ${conceptOwnershipBlock}
+${exactOwnershipBlock}
 ${chapterPremiseBlock}
 ${coverageLedgerBlock}
 ${bannedRecapsBlock}
@@ -839,7 +866,6 @@ Now write the section prose:`;
       : "";
 
     // Consolidated deduplication system (replaces 4 separate blocks)
-    const isAbsoluteFirstSection = (assignment.chapterNumber === 1 && sectionIdx === 0);
     const coverageLedger = assignment.coverageLedger ?? [];
     const bannedRecaps = assignment.bannedRecaps ?? [];
     const overusedPhrases = assignment.overusedPhrases ?? [];
@@ -851,8 +877,7 @@ Now write the section prose:`;
 FIRST-USE OWNERSHIP: The first section to introduce a concept OWNS it. Later sections reference—never re-develop.
 
 ${coverageLedger.length > 0 ? `SECTIONS WRITTEN:\n${coverageLedger.map((e) => `• [${e.heading}]: ${e.summary.slice(0, 180)}`).slice(0, 12).join("\n")}\n` : ""}${bannedRecaps.length > 0 ? `BANNED RECAPS:\n${bannedRecaps.slice(0, 15).map((s) => `• "${s.slice(0, 90)}"`).join("\n")}\n` : ""}${alreadyCovered.length > 0 ? `HARD SKIP:\n${alreadyCovered.slice(0, 12).map((p) => `• ${p.slice(0, 100)}`).join("\n")}\n` : ""}${overusedPhrases.length > 0 ? `OVERUSED: ${overusedPhrases.slice(0, 8).map((p) => `"${p}"`).join(", ")}\n` : ""}
-SCRIPTURE EXCEPTION: Skip rule NEVER applies to Bible verses. Include every scripture from THIS section's excerpts.
-${isAbsoluteFirstSection ? "" : "\nTRANSITIONAL OPENING: Open with \"Having seen…\", \"Building on…\", \"Since we established…\""}`
+SCRIPTURE EXCEPTION: A repeated reference may appear when assigned here, but its full text may be printed only when it is not in the forbidden verse registry.`
       : "";
 
     const deduplicatedSystem = `${EDITORIAL_SYSTEM}${voiceDnaBlock}${authorConfigBlock}${readabilityBlock}${coreThesisBlock}${usedIllustrationsBlock}${primaryTranslationBlock}${alreadyQuotedBlock}${PROSE_MASTERY_RULES}${dedupBlock}`;
@@ -942,6 +967,7 @@ ${isAbsoluteFirstSection ? "" : "\nTRANSITIONAL OPENING: Open with \"Having seen
     }
       return {
         body,
+        quotes: assignment.quotes,
         claimLedger: object.claimLedger ?? [],
         passiveVoiceCount: passiveHits.length,
         unfullfilledHook,
@@ -951,6 +977,7 @@ ${isAbsoluteFirstSection ? "" : "\nTRANSITIONAL OPENING: Open with \"Having seen
       const fallbackBody = stripAudienceLanguage(normalizeReaderFacingProse(await fallbackSectionBody(assignment)));
       return {
         body: fallbackBody,
+        quotes: assignment.quotes,
         claimLedger: [],
         fallback: true,
         error: err instanceof Error && err.message.trim() ? err.message : "Section write used transcript fallback",

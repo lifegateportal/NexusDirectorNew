@@ -27,6 +27,13 @@ import type {
   EbookManifest,
 } from "@/lib/schemas/ebook";
 import { SectionAssignmentSchema, EbookJobStateSchema } from "@/lib/schemas/ebook";
+import {
+  extractClaimCandidates,
+  findClaimConflicts,
+  makeCanonicalIdeaId,
+  type CanonicalIdeaOwner,
+  type ClaimRecord,
+} from "@/lib/idea-ownership";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -66,7 +73,7 @@ const STAGE_ORDER: PipelineStage[] = [
   "assigning", "writing", "polishing", "frontmatter", "exporting", "complete",
 ];
 type SignalFilterState = "idle" | "applied" | "skipped";
-type QualityReport = { score: number; pass: boolean; issues: { severity: "warn" | "error"; message: string }[] };
+type QualityReport = { score: number; pass: boolean; issues: { code?: string; severity: "warn" | "error"; message: string }[] };
 type ReviewTab = "manuscript" | "source-map" | "audio-sources";
 export type EbookPipelineSnapshot = {
   stage: PipelineStage;
@@ -156,6 +163,21 @@ async function streamSection(
     unfullfilledHook: result.unfullfilledHook ?? null,
     sequenceBreakCount: result.sequenceBreakCount ?? 0,
   };
+}
+
+async function findSemanticClaimConflicts(
+  incoming: ClaimRecord[],
+  existing: Array<ClaimRecord & { chapterNumber: number; sectionNumber: number }>,
+) {
+  if (incoming.length === 0 || existing.length === 0) return [];
+  const result = await postJson<{
+    conflicts: Array<{ incomingIndex: number; existingIndex: number; reason: string; confidence: number }>;
+  }>("/api/ebook/validate-claims", { incoming, existing });
+  return result.conflicts.map((conflict) => ({
+    ...conflict,
+    incoming: incoming[conflict.incomingIndex]?.claim ?? "",
+    prior: existing[conflict.existingIndex],
+  })).filter((conflict) => conflict.incoming && conflict.prior);
 }
 
 function countWords(text: string): number {
@@ -2046,6 +2068,10 @@ export function EbookPipeline({
         frontMatter: exportManifest.frontMatter,
       });
       setQualityReport(report);
+      const duplicateErrors = report.issues.filter((issue) => issue.code === "DUPLICATE_IDEA" && issue.severity === "error");
+      if (duplicateErrors.length > 0) {
+        throw new Error(`Export blocked: ${duplicateErrors.length} unresolved duplicate idea(s). Run the book audit and apply the recommended fixes.`);
+      }
       if (report.pass) {
         addLog(`✓ Quality score: ${report.score}/100`);
       } else {
@@ -2583,16 +2609,111 @@ export function EbookPipeline({
           newSectionAssignments.push(assignment);
         }
 
+        const priorRegenerationSections = (completedManifest?.chapters ?? [])
+          .filter((chapter) => chapter.number !== chapterNum)
+          .flatMap((chapter) => chapter.sections.map((section) => ({ ...section, chapterNumber: chapter.number })));
+        const regenerationOwnership = (completedManifest?.chapters ?? [])
+          .filter((chapter) => chapter.number !== chapterNum)
+          .map((chapter) => ({
+            chapterNumber: chapter.number,
+            chapterTitle: chapter.title,
+            sectionHeadings: chapter.sections.map((section) => section.heading),
+          }));
+        const regenerationPlanResult = await postJson<{
+          sectionPlans: Array<{
+            sectionNumber: number;
+            paragraphPlan: Array<{ purpose: string; supportedExcerptNumbers: number[]; minExcerptNumber?: number }>;
+          }>;
+        }>("/api/ebook/chapter-plan", {
+          chapterNumber: chapterNum,
+          chapterTitle: newChapterBlueprint.title,
+          nextChapterTitle: completedManifest?.chapters.find((chapter) => chapter.number === chapterNum + 1)?.title,
+          coreThesis: hybridContentMap.coreThesis || undefined,
+          voiceDNA,
+          chapterOwnershipMap: regenerationOwnership,
+          priorSectionsSample: priorRegenerationSections.flatMap((section) =>
+            (section.body ?? "").split(/\n{2,}/).map((paragraph) => paragraph.trim()).filter(Boolean)
+          ),
+          alreadyCoveredPoints: priorRegenerationSections.flatMap((section) =>
+            (section.claimLedger?.length ? section.claimLedger : extractClaimCandidates(section.body ?? ""))
+              .map((claim) => `[${section.heading}]: ${claim.claim}`)
+          ),
+          sections: newSectionAssignments.map((assignment) => ({
+            sectionNumber: assignment.sectionNumber,
+            heading: assignment.heading,
+            keyPoints: assignment.keyPoints,
+            transcriptExcerpts: assignment.transcriptExcerpts,
+            nextSectionHeading: assignment.nextSectionHeading,
+            isLastSectionInChapter: assignment.isLastSectionInChapter,
+          })),
+        });
+        const regenerationPlans = new Map(
+          regenerationPlanResult.sectionPlans
+            .filter((plan) => plan.paragraphPlan.length > 0)
+            .map((plan) => [plan.sectionNumber, plan.paragraphPlan] as const)
+        );
+        const missingRegenerationPlans = newSectionAssignments.filter(
+          (assignment) => !regenerationPlans.has(assignment.sectionNumber)
+        );
+        if (missingRegenerationPlans.length > 0) {
+          throw new Error(
+            `Source regeneration stopped: no source-backed plan for section(s) ${missingRegenerationPlans.map((assignment) => assignment.sectionNumber).join(", ")}`
+          );
+        }
+
+        const regenerationIdeaRegistry: CanonicalIdeaOwner[] = newSectionAssignments.flatMap((assignment) =>
+          [assignment.heading, ...assignment.keyPoints].map((label, index) => ({
+            id: makeCanonicalIdeaId(assignment.chapterNumber, assignment.sectionNumber, index),
+            label,
+            chapterNumber: assignment.chapterNumber,
+            sectionNumber: assignment.sectionNumber,
+            sourceSegmentIds: assignment.sourceSegmentIds,
+          }))
+        );
+        const regenerationPriorClaims = priorRegenerationSections.flatMap((section) =>
+          (section.claimLedger?.length ? section.claimLedger : extractClaimCandidates(section.body ?? ""))
+            .map((claim) => ({
+              ...claim,
+              chapterNumber: section.chapterNumber,
+              sectionNumber: section.sectionNumber,
+            }))
+        );
+
         // Step 7: Write all sections in the new chapter structure
-        const newSections: Array<{ sectionNumber: number; heading: string; body: string; quotes: Array<{ id: string; text: string; reference: string; translation: string; type: "scripture" | "quote" | "proverb"; isBlockQuote: boolean }>; wordCount: number }> = [];
+        const newSections: Array<{ sectionNumber: number; heading: string; body: string; quotes: Array<{ id: string; text: string; reference: string; translation: string; type: "scripture" | "quote" | "proverb"; isBlockQuote: boolean }>; wordCount: number; claimLedger: ClaimRecord[] }> = [];
 
         for (const assignment of newSectionAssignments) {
           addLog(`    Writing Section ${assignment.sectionNumber}: ${assignment.heading}...`);
-          
-          const sectionRes = await postJson<{ body: string; quotes: Array<{ id: string; text: string; reference: string; translation: string; type: "scripture" | "quote" | "proverb"; isBlockQuote: boolean }> }>(
+
+          const augmentedRegenerationAssignment: SectionAssignment = {
+            ...assignment,
+            assignedPlan: regenerationPlans.get(assignment.sectionNumber),
+            ideaOwnershipRegistry: regenerationIdeaRegistry,
+            coverageLedger: priorRegenerationSections.map((section) => ({
+              heading: section.heading,
+              summary: (section.claimLedger?.length ? section.claimLedger : extractClaimCandidates(section.body ?? ""))
+                .map((claim) => claim.claim).join(" ").slice(0, 500),
+            })),
+            alreadyCoveredPoints: regenerationPriorClaims.map((claim) => claim.claim),
+            priorSectionsSample: priorRegenerationSections.flatMap((section) =>
+              (section.body ?? "").split(/\n{2,}/).map((paragraph) => paragraph.trim()).filter(Boolean)
+            ),
+          };
+          const sectionRes = await postJson<{ body: string; quotes: Array<{ id: string; text: string; reference: string; translation: string; type: "scripture" | "quote" | "proverb"; isBlockQuote: boolean }>; claimLedger?: ClaimRecord[] }>(
             "/api/ebook/write-section",
-            { assignment }
+            { assignment: augmentedRegenerationAssignment }
           );
+          const sectionClaims = sectionRes.claimLedger?.length
+            ? sectionRes.claimLedger
+            : extractClaimCandidates(sectionRes.body);
+          const regenerationConflicts = findClaimConflicts(sectionClaims, regenerationPriorClaims);
+          const semanticRegenerationConflicts = await findSemanticClaimConflicts(sectionClaims, regenerationPriorClaims);
+          if (regenerationConflicts.length > 0 || semanticRegenerationConflicts.length > 0) {
+            const conflict = regenerationConflicts[0] ?? semanticRegenerationConflicts[0];
+            throw new Error(
+              `Source regeneration duplicate gate blocked Ch ${chapterNum} §${assignment.sectionNumber}: ${conflict.incoming}`
+            );
+          }
 
           newSections.push({
             sectionNumber: assignment.sectionNumber,
@@ -2600,7 +2721,13 @@ export function EbookPipeline({
             body: sectionRes.body,
             quotes: sectionRes.quotes,
             wordCount: countWords(sectionRes.body),
+            claimLedger: sectionClaims,
           });
+          regenerationPriorClaims.push(...sectionClaims.map((claim) => ({
+            ...claim,
+            chapterNumber: chapterNum,
+            sectionNumber: assignment.sectionNumber,
+          })));
 
           addLog(`    ✓ Section ${assignment.sectionNumber} — ${countWords(sectionRes.body).toLocaleString()} words`);
         }
@@ -2618,6 +2745,7 @@ export function EbookPipeline({
             heading: s.heading,
             body: s.body,
             wordCount: s.wordCount,
+            claimLedger: s.claimLedger,
             status: "complete" as const,
           })),
           chapterSegmentTexts,
@@ -3183,6 +3311,7 @@ export function EbookPipeline({
       // Built once from architecture: concept/section heading → owning chapter number.
       // Sent to write-section so the LLM knows which chapter owns each concept.
       const conceptOwnershipMap: Record<string, number> = {};
+      const ideaOwnershipRegistry: CanonicalIdeaOwner[] = [];
       // Assignment key-points lookup for coverage ledger enrichment (ch-sec → keyPoints[])
       const assignmentKeyPointsLookup = new Map<string, string[]>();
       // FIX 3: Segment-to-chapter mapping for hard chapter boundary enforcement
@@ -3190,8 +3319,22 @@ export function EbookPipeline({
       for (const ch of architecture.chapters) {
         for (const sec of ch.sections) {
           conceptOwnershipMap[sec.heading] = ch.number;
-          for (const kp of sec.keyPoints ?? []) {
+          ideaOwnershipRegistry.push({
+            id: makeCanonicalIdeaId(ch.number, sec.sectionNumber, 0),
+            label: sec.heading,
+            chapterNumber: ch.number,
+            sectionNumber: sec.sectionNumber,
+            sourceSegmentIds: sec.sourceSegmentIds ?? [],
+          });
+          for (const [keyPointIndex, kp] of (sec.keyPoints ?? []).entries()) {
             conceptOwnershipMap[kp] = ch.number;
+            ideaOwnershipRegistry.push({
+              id: makeCanonicalIdeaId(ch.number, sec.sectionNumber, keyPointIndex + 1),
+              label: kp,
+              chapterNumber: ch.number,
+              sectionNumber: sec.sectionNumber,
+              sourceSegmentIds: sec.sourceSegmentIds ?? [],
+            });
           }
           // Map each segment to its owning chapter
           for (const segId of sec.sourceSegmentIds ?? []) {
@@ -3353,12 +3496,19 @@ export function EbookPipeline({
                     chapterPlanMap.set(sp.sectionNumber, sp.paragraphPlan);
                   }
                 }
+                const unplannedSections = chapterAssignments
+                  .filter((a) => !completedSectionKeys.has(`${a.chapterNumber}-${a.sectionNumber}`))
+                  .filter((a) => !chapterPlanMap.has(a.sectionNumber));
+                if (unplannedSections.length > 0) {
+                  throw new Error(
+                    `Chapter ${assignment.chapterNumber} has no source-backed plan for section(s): ${unplannedSections.map((a) => a.sectionNumber).join(", ")}`
+                  );
+                }
                 addLog(`  ✓ Chapter ${assignment.chapterNumber} plan ready (${chapterPlanMap.size} sections planned)`);
               } catch (planErr) {
-                addLog(`  ⚠ Chapter plan failed — pipeline will stop at write-section (Fix 2: no fallback planner)`);
+                addLog(`  ✗ Chapter plan failed — drafting stopped before unowned prose could be written`);
                 console.warn("[chapter-plan] failed:", planErr);
-                // FIX 2: No fallback planner. Write-section will return 400 error.
-                // This forces the user to retry with a working chapter-plan.
+                throw planErr;
               }
             }
           }
@@ -3502,6 +3652,7 @@ export function EbookPipeline({
           consumedSegmentIds: Array.from(consumedSegmentIds),
           // Upgrade 5: concept ownership map
           conceptOwnershipMap,
+          ideaOwnershipRegistry,
           // Upgrade 7: tiered quote dedup
           forbiddenVerseTexts,
           allowedInlineOnly,
@@ -3598,6 +3749,45 @@ export function EbookPipeline({
           addLog(`  ⚠ Seq: ${sequenceBreakCount} sequence break(s) in Ch${assignment.chapterNumber} §${assignment.sectionNumber} — speaker arc may be partially out of order`);
         }
 
+        let effectiveClaimLedger: ClaimRecord[] = claimLedger.length > 0
+          ? claimLedger
+          : extractClaimCandidates(body);
+        const priorClaimLedger = allSections.flatMap((section) => {
+          const claims = section.claimLedger?.length
+            ? section.claimLedger
+            : extractClaimCandidates(section.body ?? "");
+          return claims.map((claim) => ({
+            ...claim,
+            chapterNumber: section.chapterNumber,
+            sectionNumber: section.sectionNumber,
+          }));
+        });
+        let claimConflicts = findClaimConflicts(effectiveClaimLedger, priorClaimLedger);
+        let semanticClaimConflicts = await findSemanticClaimConflicts(effectiveClaimLedger, priorClaimLedger);
+        if (claimConflicts.length > 0 || semanticClaimConflicts.length > 0) {
+          const totalConflicts = claimConflicts.length + semanticClaimConflicts.length;
+          addLog(`  ↺ ${totalConflicts} duplicate claim(s) detected — rewriting section once`);
+          const collisionExclusions = [...claimConflicts, ...semanticClaimConflicts].map((conflict) =>
+            `[Ch ${conflict.prior.chapterNumber} §${conflict.prior.sectionNumber}]: ${conflict.prior.claim}`
+          );
+          ({ body, claimLedger, passiveVoiceCount, unfullfilledHook, sequenceBreakCount } = await streamSection(
+            {
+              ...augmented,
+              alreadyCoveredPoints: [...augmented.alreadyCoveredPoints, ...collisionExclusions],
+            },
+            (authorInstructions || targetAudience) ? { instructions: authorInstructions, targetAudience } : undefined
+          ));
+          effectiveClaimLedger = claimLedger.length > 0 ? claimLedger : extractClaimCandidates(body);
+          claimConflicts = findClaimConflicts(effectiveClaimLedger, priorClaimLedger);
+          semanticClaimConflicts = await findSemanticClaimConflicts(effectiveClaimLedger, priorClaimLedger);
+          if (claimConflicts.length > 0 || semanticClaimConflicts.length > 0) {
+            const conflict = claimConflicts[0] ?? semanticClaimConflicts[0];
+            throw new Error(
+              `Duplicate idea gate blocked Ch ${assignment.chapterNumber} §${assignment.sectionNumber}: ${conflict.incoming}`
+            );
+          }
+        }
+
         const finalWc = countWords(body);
         const draft: SectionDraft = {
           chapterNumber: assignment.chapterNumber,
@@ -3605,6 +3795,7 @@ export function EbookPipeline({
           heading: assignment.heading,
           body,
           wordCount: finalWc,
+          claimLedger: effectiveClaimLedger,
           status: "complete",
         };
         allSections.push(draft);
@@ -3836,6 +4027,10 @@ export function EbookPipeline({
         { chapters: harmonizedManifest.chapters, contentMap, frontMatter: harmonizedManifest.frontMatter }
       );
       setQualityReport(quality);
+      const duplicateErrors = quality.issues.filter((issue) => issue.code === "DUPLICATE_IDEA" && issue.severity === "error");
+      if (duplicateErrors.length > 0) {
+        throw new Error(`Duplicate idea gate blocked completion: ${duplicateErrors.length} unresolved duplicate claim(s).`);
+      }
       if (quality.pass) {
         addLog(`✓ Quality score: ${quality.score}/100`);
       } else {

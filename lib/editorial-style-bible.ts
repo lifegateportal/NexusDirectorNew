@@ -56,8 +56,10 @@ SEAMLESS SYNTHESIS (HIDE THE SEAMS):
 THE SCRIPTURES AS TEACHING MATERIAL:
 - You are turning a sermon into a book. Treat all scripture references as central, 
   authoritative teaching material.
-- State scriptures as-is. Do not soften, summarize away, or heavily paraphrase the 
-  biblical text. Let the scripture stand clear and distinct.
+- Use only live-verified verse text supplied in the writing prompt. Reproduce that
+	text exactly and preserve its verified translation label.
+- Never reconstruct, complete, correct, or paraphrase biblical text from model memory.
+- If a reference has no verified text, state the reference only.
 - While the prose should flow seamlessly, the scripture itself must anchor the 
   teaching with weight and precision.
 
@@ -102,13 +104,13 @@ coherent, while remaining no more interpretive or specific than the original tra
 export const PREMIUM_BOOK_STYLE_RULES = `PREMIUM BOOK STYLE STANDARDS:
 
 STYLISTIC LIBERTY — WHAT YOU OWN:
-You have full creative authority over sentence structure, word choice, rhythm, rhetorical devices, and paragraph architecture. Use this freedom deliberately:
+You may improve sentence structure, word choice, rhythm, and paragraph architecture only where the transcript supports the result:
 - Choose the most precise and vivid word available — not the first synonym that fits.
 - Invert sentence structure for emphasis when it serves the idea.
-- Use rhetorical questions, fragments for emphasis, and colons to land a point.
+- Preserve rhetorical questions or fragments when they belong to the speaker's voice; do not add them for drama.
 - Reorder sentences within a paragraph to build better logical momentum.
 - The CONTENT (every idea, argument, story, claim, and fact) is locked to the transcript. The PRESENTATION is yours. These are separate decisions. Never confuse them.
-- If a passage can be said in three ways and all three are accurate to the source, choose the one with the most force.
+- If several phrasings are equally faithful, choose the clearest and most natural one.
 
 EM DASH BAN (absolute — zero exceptions):
 - Never use an em dash (—) for any purpose in the prose.
@@ -117,22 +119,21 @@ EM DASH BAN (absolute — zero exceptions):
 
 PARAGRAPH CRAFT:
 - No paragraph should exceed 5 sentences. Short paragraphs (1–2 sentences) are not weakness; they are emphasis.
-- Vary opening words across consecutive paragraphs. Never start two adjacent paragraphs with the same word or phrase.
-- End each paragraph with either a strong declarative statement or a forward-pulling question — never a flat summary restatement.
-- Occasionally let a paragraph close on an incomplete thought. A fragment. It signals voice, not error.
+- Avoid conspicuously repetitive openings, but never rewrite a clear sentence merely to vary its first word.
+- End where the paragraph's assigned teaching advance naturally lands. Do not manufacture a question or dramatic close.
+- Use a fragment only when it preserves a source-supported feature of the speaker's voice.
 
 SENTENCE RHYTHM & FLOW (global literary standards):
-- Mix sentence lengths deliberately: long sentences build momentum and explain; short sentences land the blow. Never write five short sentences in a row — that reads like a bullet list, not prose.
+- Let sentence length follow meaning. Revise only when repetition makes the passage difficult or monotonous to read aloud.
 - When a thought would have used an em dash, prefer a subordinate clause over a period. "She left. She was afraid." → "She left, afraid of what she might find." Use "although," "because," "while," "since," "which," and "who" to bind related ideas before reaching for a full stop.
-- No three consecutive sentences should share the same approximate length or grammatical structure.
-- Vary sentence openings: leading participial phrases ("Having set this foundation..."), inverted constructions ("What the disciples expected was power; what they received was a flame."), and sentences that open with a prepositional phrase or subordinate clause.
-- Semicolons are encouraged: use them to join two closely related independent clauses that belong in the same breath of thought.
+- Do not impose a sentence-pattern quota. Prefer direct syntax unless a more complex construction genuinely clarifies the relationship between ideas.
+- Use semicolons only when they improve comprehension.
 - Colons introduce conclusions and explanations — prefer them where an em dash would have appeared.
 - Avoid passive constructions. Rewrite every "it was found that" and "there is a sense in which" into direct active claims.
 - Use contractions where they occur naturally in prose (it's, you're, that's, don't, isn't, won't). They read human; stiff formal constructions read robotic.
 
-PASSIVE VOICE — ZERO TOLERANCE (scan every sentence before returning):
-Passive constructions drain authority from prose. Identify and rewrite every instance before finalizing output.
+PASSIVE VOICE:
+Prefer active voice when the transcript identifies the actor and the rewrite preserves meaning. Passive voice is valid when the actor is unknown, irrelevant, or absent from the source.
 
 BANNED PASSIVE PATTERNS (rewrite all of these):
 - "is/are/was/were + past participle": "is seen," "was found," "are called," "were given" → find the actor and make them the subject.
@@ -142,7 +143,7 @@ BANNED PASSIVE PATTERNS (rewrite all of these):
 - "we are called to," "we are meant to," "believers are told to" → "the call is," "the imperative is," "the text commands."
 - "can be seen," "can be found," "should be noted" → show it; do not narrate that it can be seen.
 
-ACTIVE REWRITE METHOD: Ask "Who is doing what?" and make the doer the subject. If there is no clear doer from the transcript, delete the sentence rather than inventing one.
+ACTIVE REWRITE METHOD: Ask "Who is doing what?" and make the doer the subject only when the transcript supplies that doer. Never invent an actor to avoid passive voice.
 
 TENSE CONSISTENCY (enforce in every paragraph before returning):
 - Use PRESENT TENSE for teaching, principles, theological claims, and application: "Faith works through love," not "Faith worked through love." "Paul argues," not "Paul argued."
@@ -168,7 +169,7 @@ TRANSITIONS:
 - Never stack two rhetorical questions in back-to-back sentences.
 
 HUMANIZATION RULES (anti-AI detection — enforce rigorously):
-- Break perfect parallel structure. If a list of three things has matching grammatical form, make one of them slightly different in structure.
+- Prefer natural syntax over conspicuous formula. Do not intentionally damage clear parallel structure merely to appear human.
 - Avoid "X is not just A; it is B" and "X is not merely A, it is B" sentence frames — these are AI signatures.
 - Avoid the double-comma appositive: "Love, the foundation of all things, is..." — rewrite as a separate sentence.
 - Never follow a big claim with "This means that..." or "What this tells us is..." — land the implication directly.

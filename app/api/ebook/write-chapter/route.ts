@@ -4,6 +4,7 @@ import { z } from "zod";
 import { deepSeekModel } from "@/lib/ai-providers";
 import { WriteChapterRequestSchema, WriteChapterOutputSchema } from "@/lib/schemas/ebook";
 import { SOURCE_LOCK_RULES, PROSE_MASTERY_RULES, READER_NORMALIZATION_RULES, PREMIUM_BOOK_STYLE_RULES, stripAudienceLanguage, cleanTranscriptForBook } from "@/lib/editorial-style-bible";
+import { hydrateScriptureQuotes } from "@/lib/scripture-service";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -19,10 +20,34 @@ export async function POST(req: NextRequest) {
 
   const {
     chapterNumber, chapterTitle, chapterPremise, nextChapterTitle, coreThesis,
-    primaryTranslation, voiceDNA, authorConfig, sections,
+    primaryTranslation, voiceDNA, authorConfig, sections: unverifiedSections,
     alreadyCoveredPoints, priorSectionsSample, bannedRecaps,
     alreadyQuotedRefs, forbiddenVerseTexts, overusedPhrases,
   } = input;
+
+  let sections;
+  try {
+    const unplannedSections = unverifiedSections.filter((section) => !section.assignedPlan?.length);
+    if (unplannedSections.length > 0) {
+      return NextResponse.json({
+        error: "Source-backed paragraph plans required",
+        details: `Chapter ${chapterNumber} cannot be drafted without plans for section(s): ${unplannedSections.map((section) => section.sectionNumber).join(", ")}`,
+      }, { status: 409 });
+    }
+    sections = await Promise.all(unverifiedSections.map(async (section) => ({
+      ...section,
+      quotes: await hydrateScriptureQuotes({
+        quotes: section.quotes,
+        sourceTexts: section.transcriptExcerpts,
+        defaultTranslation: primaryTranslation,
+      }),
+    })));
+  } catch (error) {
+    return NextResponse.json({
+      error: "Scripture verification failed",
+      details: error instanceof Error ? error.message : "Live Scripture provider unavailable",
+    }, { status: 502 });
+  }
 
   // ── Voice DNA block ────────────────────────────────────────────────────────
   const voiceDnaBlock = voiceDNA
@@ -119,12 +144,12 @@ Extract core insights from the transcript. Reassemble as premium book prose — 
 • Active voice, strong verbs, authoritative tone
 • NO em dashes (—). Use comma, colon, semicolon, or subordinate clause instead
 • Contractions are natural (it's, you're, don't, isn't)
-• Vary sentence length: short punch after long explanation; deliberate fragments for emphasis (12 words max)
+• Write for effortless comprehension when read aloud; let rhythm follow the teaching
 • No consecutive paragraphs opening with the same word
 • BANNED AI clichés: "In conclusion", "delve into", "tapestry", "navigate", "It's important to note", "Furthermore", "Moreover", "transformative", "vibrant", "fostering", "unpack", "ultimately", "at its core", "in essence", "profoundly", "certainly", "indeed", "simply put"
 
 # PARAGRAPH FORMAT
-Each paragraph is a string in a JSON array. ONE idea per paragraph. 3–5 sentences. New point, new scripture quotation, or new example = new array element. NEVER add markdown headings inside paragraph arrays.
+Each paragraph is a string in a JSON array. Give each paragraph one teaching advance and only as many sentences as it needs. New point, new scripture quotation, or new example = new array element. NEVER add markdown headings inside paragraph arrays.
 
 # SECTION BOUNDARIES
 Each section is sealed. Do NOT preview the next section's content from within the current one. Presuppose what you just wrote — opening sentences of Section 2+ must not re-introduce concepts already developed.
@@ -132,7 +157,7 @@ Each section is sealed. Do NOT preview the next section's content from within th
 # SCRIPTURE RULES
 • Short (<40 words): *"verse text"* (Book Chapter:Verse, Translation) inline
 • Long (40+ words): markdown blockquote, no quotation marks, — Reference (Translation) at end
-• Always complete the TEXT → TRUTH → APPLICATION circuit within 2–3 paragraphs
+• Develop only the truth or application the speaker explicitly draws from the text; never force an application circuit
 • No post-quote restatement (next sentence must ADVANCE the argument, not re-explain the quote)
 • Anchor controlling verse BEFORE exposition, not after
 • Preserve Greek/Hebrew terms exactly as the speaker stated them
