@@ -107,27 +107,18 @@ function parseSignalFilterLog(logEntries: string[]): { state: SignalFilterState;
 
 async function postJson<T>(url: string, body: unknown, retries = 1): Promise<T> {
   const route = routeLabel(url);
-  const requestTimeoutMs = 290_000;
   for (let attempt = 0; attempt <= retries; attempt++) {
     let res: Response;
-    const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), requestTimeoutMs);
     try {
       res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
-        signal: controller.signal,
       });
     } catch (err) {
-      window.clearTimeout(timeout);
-      if (err instanceof DOMException && err.name === "AbortError") {
-        throw new Error(`Request timed out: ${route} (the pipeline can be resumed to retry this step)`);
-      }
       const cause = err instanceof Error ? err.message : "Unknown network failure";
       throw new Error([`Request failed: ${route}`, `Cause: ${cause}`].join("\n"));
     }
-    window.clearTimeout(timeout);
     if (!res.ok) {
       const rawText = await res.text();
       let err: { error?: string; details?: string; route?: string } = {};
@@ -3789,11 +3780,17 @@ export function EbookPipeline({
           effectiveClaimLedger = claimLedger.length > 0 ? claimLedger : extractClaimCandidates(body);
           claimConflicts = findClaimConflicts(effectiveClaimLedger, priorClaimLedger);
           semanticClaimConflicts = await findSemanticClaimConflicts(effectiveClaimLedger, priorClaimLedger);
-          if (claimConflicts.length > 0 || semanticClaimConflicts.length > 0) {
-            const conflict = claimConflicts[0] ?? semanticClaimConflicts[0];
+          const blockingClaimConflicts = [...claimConflicts, ...semanticClaimConflicts].filter(
+            (conflict) => conflict.prior.chapterNumber !== assignment.chapterNumber
+          );
+          if (blockingClaimConflicts.length > 0) {
+            const conflict = blockingClaimConflicts[0];
             throw new Error(
               `Duplicate idea gate blocked Ch ${assignment.chapterNumber} §${assignment.sectionNumber}: ${conflict.incoming}`
             );
+          }
+          if (claimConflicts.length > 0 || semanticClaimConflicts.length > 0) {
+            addLog(`  ⚠ Related claim retained within Chapter ${assignment.chapterNumber}; section advances the same sermon argument`);
           }
         }
 

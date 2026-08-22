@@ -109,12 +109,13 @@ export function evaluateBookQuality(input: {
           }
         }
         if (strongest) {
+          const isCrossChapter = strongest.chapterNumber !== chapter.number;
           issues.push({
             code: "DUPLICATE_IDEA",
-            severity: "error",
+            severity: isCrossChapter ? "error" : "warn",
             message: `Chapter ${chapter.number} section ${section.sectionNumber} repeats a claim owned by Chapter ${strongest.chapterNumber} section ${strongest.sectionNumber} (${Math.round(strongest.similarity * 100)}% match).`,
           });
-          score -= 12;
+          score -= isCrossChapter ? 12 : 3;
         }
         acceptedClaims.push({
           claim: candidate.claim,
