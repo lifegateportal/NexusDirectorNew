@@ -146,7 +146,11 @@ async function fetchFromBolls(
   };
 }
 
-export async function fetchVerifiedScripture(input: {
+const SCRIPTURE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const SCRIPTURE_CACHE_MAX_ENTRIES = 500;
+const scriptureCache = new Map<string, { expiresAt: number; result: Promise<VerifiedScripture> }>();
+
+async function fetchVerifiedScriptureUncached(input: {
   reference: string;
   translation?: string;
   returnVerses?: boolean;
@@ -188,6 +192,32 @@ export async function fetchVerifiedScripture(input: {
     sourceUrl,
     verifiedAt: new Date().toISOString(),
   };
+}
+
+export async function fetchVerifiedScripture(input: {
+  reference: string;
+  translation?: string;
+  returnVerses?: boolean;
+}): Promise<VerifiedScripture> {
+  const translation = normalizeScriptureTranslation(input.translation);
+  const normalizedReference = input.reference.toLowerCase().replace(/\s+/g, " ").trim();
+  const cacheKey = `${translation}:${normalizedReference}:${input.returnVerses ? "verses" : "text"}`;
+  const now = Date.now();
+  const cached = scriptureCache.get(cacheKey);
+  if (cached && cached.expiresAt > now) return cached.result;
+  if (cached) scriptureCache.delete(cacheKey);
+
+  const result = fetchVerifiedScriptureUncached({ ...input, translation }).catch((error) => {
+    scriptureCache.delete(cacheKey);
+    throw error;
+  });
+  scriptureCache.set(cacheKey, { expiresAt: now + SCRIPTURE_CACHE_TTL_MS, result });
+
+  if (scriptureCache.size > SCRIPTURE_CACHE_MAX_ENTRIES) {
+    const oldestKey = scriptureCache.keys().next().value as string | undefined;
+    if (oldestKey) scriptureCache.delete(oldestKey);
+  }
+  return result;
 }
 
 function referenceKey(reference: string): string {

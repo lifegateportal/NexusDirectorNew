@@ -170,10 +170,30 @@ async function findSemanticClaimConflicts(
   existing: Array<ClaimRecord & { chapterNumber: number; sectionNumber: number }>,
 ) {
   if (incoming.length === 0 || existing.length === 0) return [];
-  const result = await postJson<{
-    conflicts: Array<{ incomingIndex: number; existingIndex: number; reason: string; confidence: number }>;
-  }>("/api/ebook/validate-claims", { incoming, existing });
-  return result.conflicts.map((conflict) => ({
+  const requests: Array<Promise<Array<{
+    incomingIndex: number;
+    existingIndex: number;
+    reason: string;
+    confidence: number;
+  }>>> = [];
+  for (let incomingOffset = 0; incomingOffset < incoming.length; incomingOffset += 40) {
+    for (let existingOffset = 0; existingOffset < existing.length; existingOffset += 400) {
+      const incomingChunk = incoming.slice(incomingOffset, incomingOffset + 40);
+      const existingChunk = existing.slice(existingOffset, existingOffset + 400);
+      requests.push(
+        postJson<{
+          conflicts: Array<{ incomingIndex: number; existingIndex: number; reason: string; confidence: number }>;
+        }>("/api/ebook/validate-claims", { incoming: incomingChunk, existing: existingChunk })
+          .then((result) => result.conflicts.map((conflict) => ({
+            ...conflict,
+            incomingIndex: conflict.incomingIndex + incomingOffset,
+            existingIndex: conflict.existingIndex + existingOffset,
+          })))
+      );
+    }
+  }
+  const conflicts = (await Promise.all(requests)).flat();
+  return conflicts.map((conflict) => ({
     ...conflict,
     incoming: incoming[conflict.incomingIndex]?.claim ?? "",
     prior: existing[conflict.existingIndex],
@@ -3385,6 +3405,7 @@ export function EbookPipeline({
       // Populated at chapter rotation; consumed in the section loop instead of calling write-section.
       const chapterWriteCache = new Map<string, { paragraphs: string[]; claimLedger: Array<{ claim: string }> }>();
       let chapterWrittenForChapter = -1;
+      const sectionWriteContexts = new Map<string, SectionAssignment>();
 
       if (completedCount > 0) {
         addLog(`↩ Resuming — ${completedCount} sections already written, continuing from section ${completedCount + 1}`);
@@ -3688,6 +3709,7 @@ export function EbookPipeline({
           // Chapter-level pre-computed plan — skips per-section planner in write-section
           assignedPlan: chapterPlanMap.get(assignment.sectionNumber),
         };
+        sectionWriteContexts.set(key, augmented);
         addLog(`Writing Ch ${assignment.chapterNumber} § ${assignment.sectionNumber}: ${assignment.heading}…`);
 
         // Update section status to "writing"
@@ -3762,12 +3784,12 @@ export function EbookPipeline({
             sectionNumber: section.sectionNumber,
           }));
         });
-        let claimConflicts = findClaimConflicts(effectiveClaimLedger, priorClaimLedger);
-        let semanticClaimConflicts = await findSemanticClaimConflicts(effectiveClaimLedger, priorClaimLedger);
-        if (claimConflicts.length > 0 || semanticClaimConflicts.length > 0) {
-          const totalConflicts = claimConflicts.length + semanticClaimConflicts.length;
-          addLog(`  ↺ ${totalConflicts} duplicate claim(s) detected — rewriting section once`);
-          const collisionExclusions = [...claimConflicts, ...semanticClaimConflicts].map((conflict) =>
+        let claimConflicts = findClaimConflicts(effectiveClaimLedger, priorClaimLedger).filter(
+          (conflict) => conflict.prior.chapterNumber !== assignment.chapterNumber
+        );
+        if (claimConflicts.length > 0) {
+          addLog(`  ↺ ${claimConflicts.length} cross-chapter duplicate claim(s) detected — rewriting section once`);
+          const collisionExclusions = claimConflicts.map((conflict) =>
             `[Ch ${conflict.prior.chapterNumber} §${conflict.prior.sectionNumber}]: ${conflict.prior.claim}`
           );
           ({ body, claimLedger, passiveVoiceCount, unfullfilledHook, sequenceBreakCount } = await streamSection(
@@ -3778,19 +3800,14 @@ export function EbookPipeline({
             (authorInstructions || targetAudience) ? { instructions: authorInstructions, targetAudience } : undefined
           ));
           effectiveClaimLedger = claimLedger.length > 0 ? claimLedger : extractClaimCandidates(body);
-          claimConflicts = findClaimConflicts(effectiveClaimLedger, priorClaimLedger);
-          semanticClaimConflicts = await findSemanticClaimConflicts(effectiveClaimLedger, priorClaimLedger);
-          const blockingClaimConflicts = [...claimConflicts, ...semanticClaimConflicts].filter(
+          claimConflicts = findClaimConflicts(effectiveClaimLedger, priorClaimLedger).filter(
             (conflict) => conflict.prior.chapterNumber !== assignment.chapterNumber
           );
-          if (blockingClaimConflicts.length > 0) {
-            const conflict = blockingClaimConflicts[0];
+          if (claimConflicts.length > 0) {
+            const conflict = claimConflicts[0];
             throw new Error(
               `Duplicate idea gate blocked Ch ${assignment.chapterNumber} §${assignment.sectionNumber}: ${conflict.incoming}`
             );
-          }
-          if (claimConflicts.length > 0 || semanticClaimConflicts.length > 0) {
-            addLog(`  ⚠ Related claim retained within Chapter ${assignment.chapterNumber}; section advances the same sermon argument`);
           }
         }
 
@@ -3861,6 +3878,119 @@ export function EbookPipeline({
               : ch
           )
         );
+
+        if (isLastSectionInChapter) {
+          const chapterSections = allSections.filter(
+            (section) => section.chapterNumber === assignment.chapterNumber
+          );
+          const priorChapterClaims = allSections
+            .filter((section) => section.chapterNumber !== assignment.chapterNumber)
+            .flatMap((section) => {
+              const claims = section.claimLedger?.length
+                ? section.claimLedger
+                : extractClaimCandidates(section.body ?? "");
+              return claims.map((claim) => ({
+                ...claim,
+                chapterNumber: section.chapterNumber,
+                sectionNumber: section.sectionNumber,
+              }));
+            });
+          const chapterClaimEntries = chapterSections.flatMap((section) => {
+            const claims = section.claimLedger?.length
+              ? section.claimLedger
+              : extractClaimCandidates(section.body ?? "");
+            return claims.map((claim) => ({ ...claim, sectionNumber: section.sectionNumber }));
+          });
+
+          if (chapterClaimEntries.length > 0 && priorChapterClaims.length > 0) {
+            addLog(`  ◇ Validating Chapter ${assignment.chapterNumber} claims against prior chapters…`);
+            const semanticConflicts = await findSemanticClaimConflicts(chapterClaimEntries, priorChapterClaims);
+            const conflictsBySection = new Map<number, typeof semanticConflicts>();
+            for (const conflict of semanticConflicts) {
+              const sectionNumber = chapterClaimEntries[conflict.incomingIndex]?.sectionNumber;
+              if (!sectionNumber) continue;
+              const sectionConflicts = conflictsBySection.get(sectionNumber) ?? [];
+              sectionConflicts.push(conflict);
+              conflictsBySection.set(sectionNumber, sectionConflicts);
+            }
+
+            for (const [sectionNumber, sectionConflicts] of conflictsBySection) {
+              const context = sectionWriteContexts.get(`${assignment.chapterNumber}-${sectionNumber}`);
+              if (!context) continue;
+              addLog(`  ↺ ${sectionConflicts.length} semantic duplicate(s) in §${sectionNumber} — rewriting that section once`);
+              const collisionExclusions = sectionConflicts.map((conflict) =>
+                `[Ch ${conflict.prior.chapterNumber} §${conflict.prior.sectionNumber}]: ${conflict.prior.claim}`
+              );
+              const rewritten = await streamSection(
+                {
+                  ...context,
+                  alreadyCoveredPoints: [...context.alreadyCoveredPoints, ...collisionExclusions],
+                },
+                (authorInstructions || targetAudience) ? { instructions: authorInstructions, targetAudience } : undefined
+              );
+              const sectionIndex = allSections.findIndex(
+                (section) => section.chapterNumber === assignment.chapterNumber && section.sectionNumber === sectionNumber
+              );
+              if (sectionIndex < 0) continue;
+              const rewrittenDraft: SectionDraft = {
+                ...allSections[sectionIndex],
+                body: rewritten.body,
+                wordCount: countWords(rewritten.body),
+                claimLedger: rewritten.claimLedger.length > 0
+                  ? rewritten.claimLedger
+                  : extractClaimCandidates(rewritten.body),
+              };
+              allSections[sectionIndex] = rewrittenDraft;
+              setChapters((prev) => prev.map((chapter) =>
+                chapter.number === assignment.chapterNumber
+                  ? {
+                      ...chapter,
+                      sections: chapter.sections.map((section) =>
+                        section.sectionNumber === sectionNumber ? rewrittenDraft : section
+                      ),
+                    }
+                  : chapter
+              ));
+            }
+
+            if (conflictsBySection.size > 0) {
+              const rewrittenChapterClaims = allSections
+                .filter((section) => section.chapterNumber === assignment.chapterNumber)
+                .flatMap((section) => {
+                  const claims = section.claimLedger?.length
+                    ? section.claimLedger
+                    : extractClaimCandidates(section.body ?? "");
+                  return claims.map((claim) => ({ ...claim, sectionNumber: section.sectionNumber }));
+                });
+              const remainingConflicts = await findSemanticClaimConflicts(rewrittenChapterClaims, priorChapterClaims);
+              if (remainingConflicts.length > 0) {
+                const retrySectionNumbers = new Set(conflictsBySection.keys());
+                allSections = allSections.filter(
+                  (section) => section.chapterNumber !== assignment.chapterNumber || !retrySectionNumbers.has(section.sectionNumber)
+                );
+                completedCount -= retrySectionNumbers.size;
+                acc.sections = [...allSections];
+                acc.progress = { total: totalSections, completed: completedCount };
+                throw new Error(
+                  `Duplicate idea gate blocked Chapter ${assignment.chapterNumber} after one targeted rewrite`
+                );
+              }
+
+              currentChapterProse = allSections
+                .filter((section) => section.chapterNumber === assignment.chapterNumber)
+                .map((section) => section.body ?? "")
+                .join("\n\n");
+              previousEnding = getLastSentence(currentChapterProse);
+              writtenCorpus = allSections.map((section) => section.body ?? "").join("\n\n");
+              usedIllustrations.clear();
+              for (const section of allSections) {
+                for (const label of extractIllustrationLabels(section.body ?? "")) usedIllustrations.add(label);
+              }
+              addLog(`  ✓ Chapter ${assignment.chapterNumber} semantic ownership verified`);
+            }
+          }
+        }
+
         setProgress({ total: totalSections, completed: completedCount });
         addLog(`  ✓ ${finalWc.toLocaleString()} words written`);
         // Save after every section so a refresh never loses completed work
