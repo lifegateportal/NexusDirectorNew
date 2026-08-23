@@ -277,6 +277,8 @@ Every title, section heading, and key theme you write MUST derive word-for-word 
 CHAPTER TITLE RULE:
 - 4–7 words. Punchy. Sounds like a book you would buy, not an academic paper.
 - Use the speaker's actual words or a natural distillation of their central claim.
+- Use concise, idiomatic book language rather than a complete sermon sentence or explanatory instruction. Remove unnecessary helper verbs and reader address when the source-supported central claim remains intact.
+- Read the title aloud. If it sounds like spoken setup rather than a published title, compress it without changing its meaning.
 - Must be a COMPLETE, self-contained phrase — no dangling prepositions, no dangling conjunctions.
 - FORBIDDEN formats: "The [abstract noun] of X and Y" | "The [adjective] link between X and Y" | "The [noun] dimensions of X (parenthetical list)" | anything with a parenthetical aside.
 - GOOD: "When Prayer Changes the Pray-er" | "The Glory That Prayer Reveals" | "Righteous Living Fuels Effectual Prayer"
@@ -587,7 +589,7 @@ This content is a sermon series. The author's preaching sequence IS the book's s
 - Never leave sections empty; every chapter must have at least one section with at least one sourceSegmentId.
 - SECTION HEADING BAN: Never start a section heading with "Introduction", "Intro", "Overview", "Opening", "Summary", or "Conclusion". These are structural labels, not teaching titles. Rename any such heading to the specific claim or truth the speaker made in that segment.
 - SECTION HEADING STANDARD — NON-NEGOTIABLE: Every section heading must be a COMPLETE, self-contained phrase of 4–8 words. Full sentences are forbidden. A heading that ends mid-thought (dangling preposition, dangling conjunction, or incomplete clause) is a failure. FORBIDDEN endings: any heading that ends with "to", "our", "the", "in", "for", "on", "and", "but", "or", "let", "a". GOOD: "Prayer Reveals Hidden Glory" | "The Righteous Life Powers Prayer" | "God Listens to Those Who Pray" | BAD: "Pray until you are no longer" (dangling) | "When we open up our" (dangling) | "Is any among you afflicted? Let" (fragment).
-- CHAPTER TITLE STANDARD: Chapter titles must be 4–7 words, punchy, and sound like a published book — not an academic description. FORBIDDEN: parenthetical asides in titles, the phrase "The [abstract noun] of X and Y", thesis-statement format. GOOD: "When Prayer Changes the Pray-er" | BAD: "Prayer as a transformative encounter that reveals hidden glory and changes the pray-er's internal state".`,
+- CHAPTER TITLE STANDARD: Chapter titles must be 4–7 words, concise, idiomatic, and sound like a published book rather than an academic description or complete sermon sentence. Use the speaker's words or a natural distillation of the source-supported central claim. Remove unnecessary helper verbs and reader address without changing meaning. FORBIDDEN: parenthetical asides in titles, the phrase "The [abstract noun] of X and Y", thesis-statement format. GOOD: "When Prayer Changes the Pray-er" | BAD: "Prayer as a transformative encounter that reveals hidden glory and changes the pray-er's internal state".`,
         prompt: `Design the chapter architecture.
 
       VOICE DNA TONE: ${input.voiceDNA.toneProfile}

@@ -42,17 +42,9 @@ function fallbackPolishOutput(chapter: z.infer<typeof PolishChapterRequestSchema
         `What should the reader carry forward from this chapter?`,
       ];
 
-  // Intro: derive from headings and key points — never copy the body prose.
-  const headingsSummary = sections
-    .map((s) => s.heading?.trim())
-    .filter(Boolean)
-    .join(", ");
-  const fallbackIntro = headingsSummary
-    ? `This chapter examines: ${headingsSummary}.`
-    : chapter.title || "";
-
   return {
-    intro: stripAudienceLanguage(fallbackIntro),
+    // The first body section is safer than manufacturing an unsupported frame.
+    intro: "",
     forwardQuestion: "",
 
     keyTakeaways: takeaways.length > 0 ? takeaways.map((item) => stripAudienceLanguage(item)) : [stripAudienceLanguage(chapter.title || "")].filter(Boolean),
@@ -98,7 +90,7 @@ export async function POST(req: NextRequest) {
     const epigraphCandidates = (chapter.quotesInChapter ?? [])
       .filter((q) => q.type === "scripture")
       .slice(0, 5)
-      .map((q) => `"${q.text.slice(0, 120)}" \u2014 ${q.reference}${q.translation ? ` (${q.translation})` : ""}`)
+      .map((q) => `"${q.text}" (${q.reference}${q.translation ? `, ${q.translation}` : ""})`)
       .join("\n");
 
     const prevChapterBlock = chapter.previousChapterForwardQuestion
@@ -143,15 +135,15 @@ EM DASH ABSOLUTE BAN: Never use an em dash (—) in any output. No spaced em das
 HUMANIZATION: Use contractions naturally. Avoid "not just...but", "not merely...but", "indeed,", "certainly,", "ultimately,", "at its core", "in essence", "profoundly", "transformative". Break any run of three parallel-structured sentences.
 
 Your tasks:
-1. EPIGRAPH: From the provided scripture candidates, pick the ONE most resonant opening quote for this chapter. Return it formatted as: "Quote text." — Reference (Translation). If no candidate strongly fits or none are provided, return an empty string. Never invent a quote.
-2. INTRO (CONSOLIDATED CHAPTER OPENER): Two sentences — no more, no less.
-   Sentence 1: ONE bold declarative statement — the north star thesis of this chapter. States what is at stake, what will be proven, or what the reader will discover. Present tense. Direct. Max 20 words.
-   Sentence 2: ONE provocative question that makes the reader feel the personal stakes and need to read on. Sharp, specific to this chapter's content — not generic.
-   The two sentences must work as a unit: the first declares, the second destabilizes. Together they are the door into the chapter.
-   WRONG: "In this chapter, we'll explore what it means to walk in faith. This is an important topic."
-   RIGHT: "Faith is not the absence of doubt — it is action taken despite it. So why do so many of us pray for more faith instead of just moving?"
-   CRITICAL: Do NOT copy the opening sentences of Section 1. Do NOT summarize the chapter contents.
-   CONNECTIVE TISSUE: If a "PREVIOUS CHAPTER FORWARD QUESTION" is provided, sentence 1 should feel like the answer beginning to form.
+1. EPIGRAPH: From the provided Scripture candidates, pick the ONE most resonant opening quote for this chapter. Reproduce the candidate verbatim and format it as: "Quote text." (Book Chapter:Verse, Translation). If no candidate strongly fits or none are provided, return an empty string. Never truncate, reconstruct, or invent a quote.
+2. INTRO (OPTIONAL CHAPTER OPENER): First decide whether a separate intro adds necessary source-supported orientation beyond the first section summary. If not, return an empty string and let Section 1 open the chapter.
+  • When an intro is warranted, write 1–3 concise sentences grounded only in the chapter premise, section headings, and key takeaways supplied below.
+  • Establish the governing tension or distinction directly. A question is optional, never mandatory.
+  • Do not invent an anecdote, dramatic scene, inspirational hook, promise, or implication.
+  • Do not write "This chapter explores/examines" or summarize the table of contents.
+  • Do not copy or paraphrase Section 1's opening claim merely to create extra framing.
+  • If the controlling Scripture already provides the strongest opening, allow the epigraph and Section 1 to lead without an additional intro.
+  • If a PREVIOUS CHAPTER FORWARD QUESTION is provided, an intro may answer it only when the supplied chapter material explicitly supports that answer.
 3. FORWARD QUESTION: ONE sentence — a preemptive question that plants anticipation for where the book goes next.
    This is the last thing the reader sees before turning the page. It should feel like an open door, not a closed summary.
    It must point forward, not backward. Never restate what the chapter covered.

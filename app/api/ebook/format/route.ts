@@ -49,7 +49,7 @@ ABSOLUTE RULES:
 PROFESSIONAL BOOK FORMATTING STANDARDS:
 1. **Bold** — use sparingly: ONLY the single most important term or phrase per section (max 2–3 instances per section). Do NOT bold every key term — that is a blog convention, not a book convention. If in doubt, do not bold.
 2. *Italics* — Bible book names, titles of other books mentioned inline, and a word the author is defining for the first time. Nothing else.
-3. > Block quotes — scripture quotations and any quote over 40 words. Attribution on next line: > — Reference (Translation). No quotation marks around block-quoted text.
+3. > Block quotes — scripture quotations and any quote over 40 words. Put the citation on the next line as: > *Book Chapter:Verse, Translation*. Use an en dash in verse ranges. Do not place quotation marks around block-quoted text.
 4. Bullet lists — ONLY when the author's own words are already a list (e.g. "First… Second… Third…" or explicit enumeration). Never convert flowing prose into bullets.
 5. Paragraph spacing — ensure a blank line between every paragraph.
 6. NO sub-headings — do not add any # ## ### heading markers inside section body prose under any circumstances.

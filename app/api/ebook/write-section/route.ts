@@ -396,23 +396,25 @@ ARGUMENT FLOW:
 SHORT INLINE (under 40 words, woven into sentence): *"verse text"* (Book Chapter:Verse, Translation)
 SHORT STANDALONE (under 40 words, quoted as own statement):
 > Verse text here.
-> — Book Chapter:Verse (Translation)
+> *Book Chapter:Verse, Translation*
 
 LONG BLOCK (40+ words—mandatory blockquote, no quotation marks):
 > Verse text here, continuing across
 > multiple lines as needed.
-> — Book Chapter:Verse (Translation)
+> *Book Chapter:Verse, Translation*
 
 CRITICAL RULES:
 • Reproduce scripture EXACTLY from the VERIFIED SCRIPTURES / QUOTES supplied in the prompt. Never reconstruct verse text from memory.
 • Preserve the verified translation label. If verified text is unavailable, use the reference only and do not supply verse wording.
+• Use a comma before the translation abbreviation in every citation: (Psalm 27:1, NIV), not (Psalm 27:1 NIV).
+• Use an en dash in verse ranges: Titus 2:11–14.
 • Place a central passage where the speaker uses it in the argument. Do not move it earlier for dramatic effect.
 • No post-quote restatement. The sentence after scripture must advance, apply, or land an implication—not echo what was just said.
 • Include original Greek/Hebrew terms exactly as the speaker stated them: the Greek word *transliteration*, meaning "definition."
 • Quote each scripture ONCE per section. Subsequent references use shorthand only: "As Jesus said in John 15:5..."
 • Never add biblical background (historical setting, authorial intent, cultural context) unless the speaker explicitly stated it.
 • Develop only the truth or application the speaker explicitly draws from the text. Do not force an application circuit.
-• Always include translation abbreviation: (NIV), (KJV), (ESV), etc.
+• Always include the verified translation abbreviation in the citation.
 
 ═══ VOICE DNA ENFORCEMENT ═══
 When Voice DNA is provided, you MUST:
