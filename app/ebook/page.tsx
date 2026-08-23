@@ -20,7 +20,7 @@ import {
   generateEbookProjectId,
 } from "@/lib/ebook-project-store";
 import type { EbookProject } from "@/lib/ebook-project-store";
-import { getEbookJob } from "@/lib/ebook-job-store";
+import { getEbookJob, listEbookJobs } from "@/lib/ebook-job-store";
 
 const JOB_STATE_KEY = "nexus_ebook_job_state";
 const JOB_STORAGE_KEY = "nexus_ebook_current_job"; // IndexedDB job-ID pointer
@@ -351,12 +351,26 @@ function EbookPageClient() {
 
     try {
       const savedJobId = localStorage.getItem(JOB_STORAGE_KEY);
-      if (!savedJobId) return null;
-      const fromStore = await getEbookJob(savedJobId).catch(() => null);
-      const parsed = normalizeJobStateForSave(fromStore);
-      if (!hasResumableProgress(parsed)) return null;
-      localStorage.setItem(JOB_STATE_KEY, JSON.stringify(parsed));
-      return parsed;
+      if (savedJobId) {
+        const fromStore = await getEbookJob(savedJobId).catch(() => null);
+        const parsed = normalizeJobStateForSave(fromStore);
+        if (hasResumableProgress(parsed)) {
+          localStorage.setItem(JOB_STATE_KEY, JSON.stringify(parsed));
+          return parsed;
+        }
+      }
+
+      // Older failure paths could save the job but lose its localStorage pointer.
+      // Recover the newest usable IndexedDB checkpoint instead of reporting none.
+      const storedJobs = await listEbookJobs().catch(() => []);
+      const newestResumable = storedJobs
+        .map((job) => normalizeJobStateForSave(job))
+        .filter((job): job is EbookJobState => hasResumableProgress(job))
+        .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))[0] ?? null;
+      if (!newestResumable) return null;
+      localStorage.setItem(JOB_STORAGE_KEY, newestResumable.jobId);
+      localStorage.setItem(JOB_STATE_KEY, JSON.stringify(newestResumable));
+      return newestResumable;
     } catch {
       return null;
     }
@@ -775,7 +789,13 @@ function EbookPageClient() {
   }, [router]);
 
   const handleContinuePipeline = useCallback(async () => {
-    const job = await readResumableJobState();
+    // The mounted pipeline reports every checkpoint through onJobStateChange.
+    // Prefer that live state because an error may occur before an async
+    // IndexedDB write completes or mobile Safari flushes storage.
+    const liveJob = liveJobStateRef.current;
+    const job = hasResumableProgress(liveJob)
+      ? liveJob
+      : await readResumableJobState();
     if (!job) {
       setStatusMsg({ type: "error", text: "No resumable pipeline checkpoint found." });
       setHasContinueState(false);
@@ -783,6 +803,7 @@ function EbookPageClient() {
     }
 
     localStorage.setItem(JOB_STATE_KEY, JSON.stringify(job));
+    localStorage.setItem(JOB_STORAGE_KEY, job.jobId);
     liveJobStateRef.current = job;
     setCurrentProjectId((prev) => prev || job.jobId);
 

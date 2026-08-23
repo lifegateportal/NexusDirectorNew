@@ -4067,10 +4067,19 @@ export function EbookPipeline({
       acc.errorLog = logRef.current;
       acc.updatedAt = new Date().toISOString();
       const persistableFailure = sanitizeJobStateForPersistence({ ...acc });
+      // Failure recovery must not depend on an asynchronous IndexedDB write.
+      // Persist both the job pointer and full checkpoint synchronously first,
+      // which is especially important when mobile Safari suspends the page.
+      try {
+        localStorage.setItem(JOB_STORAGE_KEY, persistableFailure.jobId);
+        localStorage.setItem(JOB_STATE_KEY, JSON.stringify(persistableFailure));
+      } catch (storageErr) {
+        addLog(`⚠ Failure checkpoint localStorage save failed: ${storageErr instanceof Error ? storageErr.message : "quota exceeded"}`);
+      }
       try { 
         await saveEbookJob({ ...persistableFailure }); 
-      } catch (err) {
-        addLog(`⚠ Front matter save failed: ${err instanceof Error ? err.message : 'unknown error'}`);
+      } catch (storageErr) {
+        addLog(`⚠ Failure checkpoint IndexedDB save failed: ${storageErr instanceof Error ? storageErr.message : "unknown error"}`);
       }
       // Update savedJobRef so the Resume button has the partial state
       savedJobRef.current = { ...persistableFailure };
