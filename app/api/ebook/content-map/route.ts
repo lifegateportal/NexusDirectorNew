@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { generateObject } from "ai";
+import { generateObject, generateText } from "ai";
 import { z } from "zod";
 import { deepSeekModel } from "@/lib/ai-providers";
 import { ContentMapRequestSchema, QuoteSchema } from "@/lib/schemas/ebook";
@@ -143,6 +143,87 @@ For every scripture or quote mentioned:
 
 DO NOT reproduce large blocks of transcript text. Focus on structure and meaning.`;
 
+function parseJsonObject(raw: string): unknown {
+  const text = raw
+    .trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/i, "");
+  const start = text.indexOf("{");
+  if (start < 0) throw new Error("No JSON object found in model response");
+
+  let inString = false;
+  let escaped = false;
+  const stack: string[] = [];
+  for (let index = start; index < text.length; index++) {
+    const char = text[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+    if (char === "{") stack.push("}");
+    else if (char === "[") stack.push("]");
+    else if (char === "}" || char === "]") {
+      const expected = stack.pop();
+      if (expected !== char) continue;
+      if (stack.length === 0) return JSON.parse(text.slice(start, index + 1));
+    }
+  }
+
+  let repaired = text.slice(start).trim();
+  if (inString && !escaped) repaired += '"';
+  repaired += stack.slice().reverse().join("");
+  return JSON.parse(repaired.replace(/,\s*([}\]])/g, "$1"));
+}
+
+async function generateStructuredObject<TSchema extends z.ZodTypeAny>(options: {
+  schema: TSchema;
+  system: string;
+  prompt: string;
+  maxTokens: number;
+  timeoutMs: number;
+}): Promise<z.output<TSchema>> {
+  try {
+    const { object } = await generateObject({
+      model: deepSeekModel,
+      schema: options.schema,
+      mode: "json",
+      temperature: 0.2,
+      maxTokens: options.maxTokens,
+      maxRetries: 2,
+      abortSignal: AbortSignal.timeout(options.timeoutMs),
+      system: options.system,
+      prompt: options.prompt,
+    });
+    return options.schema.parse(object);
+  } catch (objectError) {
+    const message = objectError instanceof Error ? objectError.message.toLowerCase() : "";
+    const isTimeout = objectError instanceof Error && (
+      objectError.name === "AbortError" ||
+      message.includes("abort") ||
+      message.includes("timed out") ||
+      message.includes("timeout")
+    );
+    if (isTimeout) throw objectError;
+    console.warn("[content-map] Structured output failed; retrying as strict JSON text:", objectError);
+    const { text } = await generateText({
+      model: deepSeekModel,
+      temperature: 0.2,
+      maxTokens: options.maxTokens,
+      maxRetries: 2,
+      abortSignal: AbortSignal.timeout(options.timeoutMs),
+      system: `${options.system}\n\nReturn ONLY one valid JSON object matching the requested schema. No markdown fences or commentary.`,
+      prompt: options.prompt,
+    });
+    return options.schema.parse(parseJsonObject(text));
+  }
+}
+
 async function extractSlot(sourceAudio: z.infer<typeof SourceAudioSchema>, transcript: string) {
   const slotWords = transcript.split(/\s+/).filter(Boolean);
   const ranges: Array<{ start: number; end: number }> = [];
@@ -158,16 +239,12 @@ async function extractSlot(sourceAudio: z.infer<typeof SourceAudioSchema>, trans
   const chunkSegments: z.infer<typeof SlotSegmentExtractSchema>[][] = [];
   for (const range of ranges) {
     const chunkText = slotWords.slice(range.start, range.end).join(" ");
-    const { object } = await generateObject({
-      model: deepSeekModel,
+    const object = await generateStructuredObject({
       schema: SlotSegmentsSchema,
-      mode: "json",
-      temperature: 0.2,
       maxTokens: EXTRACTION_MAX_TOKENS,
-      maxRetries: 2,
-      abortSignal: AbortSignal.timeout(EXTRACTION_TIMEOUT_MS),
+      timeoutMs: EXTRACTION_TIMEOUT_MS,
       system: SEGMENT_SYSTEM,
-      prompt: `Extract all teaching segments from this recording (${sourceAudio}):\n\n${chunkText}`,
+      prompt: `Extract all teaching segments from this recording (${sourceAudio}). Return {"segments":[{"topic":string,"keyPoints":string[],"quotes":[{"text":string,"reference":string,"translation":string,"type":"scripture"|"quote"|"proverb","isBlockQuote":boolean}],"estimatedWordCount":number}]}.\n\n${chunkText}`,
     });
     chunkSegments.push(object.segments);
   }
@@ -226,19 +303,14 @@ async function synthesizeSegments(segments: z.infer<typeof SynthesizeRequestSche
   const topicSummary = segments
     .map((segment) => `- [${segment.sourceAudio}] ${segment.topic}: ${segment.keyPoints.join("; ")}`)
     .join("\n");
-  const { object } = await generateObject({
-    model: deepSeekModel,
+  return generateStructuredObject({
     schema: SynthesisSchema,
-    mode: "json",
-    temperature: 0.2,
     maxTokens: SYNTHESIS_MAX_TOKENS,
-    maxRetries: 2,
-    abortSignal: AbortSignal.timeout(SYNTHESIS_TIMEOUT_MS),
+    timeoutMs: SYNTHESIS_TIMEOUT_MS,
     system: `You are a senior editor identifying the overarching message of a multi-part teaching series.
 Base your synthesis ONLY on what the speaker explicitly taught. Identify the narrative north star, actual target audience, unique vocabulary, tone map, and coherent teaching arc. Consolidate recurring series recaps rather than treating them as new material.`,
-    prompt: `Synthesize these source-grounded teaching segments into the overall themes, teaching arc, core thesis, target audience, unique vocabulary, and tone map:\n\n${topicSummary}`,
+    prompt: `Synthesize these source-grounded teaching segments. Return {"totalEstimatedWords":number,"overarchingThemes":string[],"teachingArc":string,"coreThesis":string,"targetAudience":string,"uniqueVocabulary":string[],"toneMap":string}.\n\n${topicSummary}`,
   });
-  return object;
 }
 
 export async function POST(req: NextRequest) {

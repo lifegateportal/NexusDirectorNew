@@ -220,6 +220,22 @@ function countWords(text: string): number {
   return text.trim().split(/\s+/).filter(Boolean).length;
 }
 
+function extractLabeledTranscripts(masterTranscript: string): Array<{ label: string; text: string }> {
+  const headerPattern = /\[Slot-(\d+)\]/g;
+  const headers = [...masterTranscript.matchAll(headerPattern)];
+  return headers.flatMap((header, index) => {
+    const slot = Number(header[1]);
+    const contentStart = (header.index ?? 0) + header[0].length;
+    const contentEnd = headers[index + 1]?.index ?? masterTranscript.length;
+    const text = masterTranscript
+      .slice(contentStart, contentEnd)
+      .replace(/^\s*═{3,}\s*/, "")
+      .replace(/\s*═{3,}\s*$/, "")
+      .trim();
+    return slot >= 1 && slot <= 10 && text ? [{ label: `Slot-${slot}`, text }] : [];
+  });
+}
+
 function toIsoOrNow(value: unknown, nowIso: string): string {
   if (typeof value !== "string") return nowIso;
   const ts = Date.parse(value);
@@ -2219,12 +2235,16 @@ export function EbookPipeline({
   function normalizeJob(raw: EbookJobState): EbookJobState {
     const fixArrays = <T,>(v: unknown): T[] => (Array.isArray(v) ? v as T[] : []);
     const fixStr = (v: unknown, fb = ""): string => (typeof v === "string" ? v : fb);
-    const transcripts = fixArrays<Record<string, unknown>>(raw.transcripts as unknown)
+    const persistedTranscripts = fixArrays<Record<string, unknown>>(raw.transcripts as unknown)
       .map((t) => ({
         label: fixStr(t.label),
         text: fixStr(t.text),
       }))
       .filter((t) => t.text);
+    const rawMasterTranscript = fixStr(raw.masterTranscript);
+    const transcripts = persistedTranscripts.length > 0
+      ? persistedTranscripts
+      : extractLabeledTranscripts(rawMasterTranscript);
     const rebuiltMasterTranscript = transcripts
       .map((t) => `[${t.label}]\n${t.text}`)
       .join("\n\n═══════════════════════════════════════\n\n");
@@ -2318,7 +2338,7 @@ export function EbookPipeline({
       audioFileNames: fixArrays(raw.audioFileNames),
       sourceSlots: fixArrays(raw.sourceSlots),
       transcripts,
-      masterTranscript: fixStr(raw.masterTranscript, rebuiltMasterTranscript),
+      masterTranscript: rawMasterTranscript || rebuiltMasterTranscript,
       filteredTranscript: fixStr((raw as EbookJobState & { filteredTranscript?: unknown }).filteredTranscript),
       voiceDNA,
       contentMap,
@@ -3273,7 +3293,16 @@ export function EbookPipeline({
         setStage("mapping");
         type ContentMapSlot = EbookJobState["contentMapSlots"][number];
         type ContentMapSynthesis = Omit<ContentMap, "segments" | "allQuotes">;
-        const sourceTranscripts = (acc.transcripts ?? []).flatMap((transcript) => {
+        const resumableTranscripts = (acc.transcripts?.length ?? 0) > 0
+          ? acc.transcripts
+          : extractLabeledTranscripts(acc.masterTranscript || teachingTranscript);
+        if ((acc.transcripts?.length ?? 0) === 0 && resumableTranscripts.length > 0) {
+          acc.transcripts = resumableTranscripts;
+          setSourceTranscripts(resumableTranscripts);
+          addLog(`↩ Recovered ${resumableTranscripts.length} per-slot transcripts from the saved master transcript`);
+          await checkpoint("mapping");
+        }
+        const sourceTranscripts = resumableTranscripts.flatMap((transcript) => {
           const match = transcript.label.match(/^Slot-(\d+)$/);
           const slot = match ? Number(match[1]) : 0;
           if (slot < 1 || slot > 10 || !transcript.text.trim()) return [];
