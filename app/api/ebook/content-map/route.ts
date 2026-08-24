@@ -12,8 +12,11 @@ export const maxDuration = 300;
 // hitting DeepSeek's context limit, and prevents the truncation that was causing
 // the last ~37 % of each slot to be invisble to segment extraction.
 const MAX_SLOT_WORDS = 12000;
-const MAX_CONCURRENT_SLOTS = 3;
-const MAX_CONCURRENT_CHUNKS_PER_SLOT = 2;
+const MAX_CONCURRENT_EXTRACTIONS = 5;
+const EXTRACTION_MAX_TOKENS = 2200;
+const SYNTHESIS_MAX_TOKENS = 1200;
+const EXTRACTION_TIMEOUT_MS = 180_000;
+const SYNTHESIS_TIMEOUT_MS = 60_000;
 
 async function mapWithConcurrency<T, R>(
   items: T[],
@@ -167,58 +170,70 @@ export async function POST(req: NextRequest) {
       error?: string;
     };
 
-    const slotResults = await mapWithConcurrency(
-      slotChunks,
-      MAX_CONCURRENT_SLOTS,
-      async (chunk): Promise<DedupedSlotResult> => {
+    const extractionTasks = slotChunks.flatMap((chunk) => {
+      const slotWords = chunk.text.split(/\s+/);
+      const ranges: Array<{ start: number; end: number }> = [];
+      const overlap = 200;
+      let start = 0;
+      while (start < slotWords.length) {
+        const end = Math.min(start + MAX_SLOT_WORDS, slotWords.length);
+        ranges.push({ start, end });
+        if (end === slotWords.length) break;
+        start = end - overlap;
+      }
+      return ranges.map((range) => ({ chunk, slotWords, range }));
+    });
+
+    const extractionResults = await mapWithConcurrency(
+      extractionTasks,
+      MAX_CONCURRENT_EXTRACTIONS,
+      async ({ chunk, slotWords, range }) => {
         try {
-          const slotWords = chunk.text.split(/\s+/);
-          const OVERLAP = 200;
-          const chunkRanges: Array<{ start: number; end: number }> = [];
-          let start = 0;
-          while (start < slotWords.length) {
-            const end = Math.min(start + MAX_SLOT_WORDS, slotWords.length);
-            chunkRanges.push({ start, end });
-            if (end === slotWords.length) break;
-            start = end - OVERLAP;
-          }
-
-          const chunkSegments = await mapWithConcurrency(
-            chunkRanges,
-            MAX_CONCURRENT_CHUNKS_PER_SLOT,
-            async (range) => {
-              const chunkText = slotWords.slice(range.start, range.end).join(" ");
-              const { object } = await generateObject({
-                model: deepSeekModel,
-                schema: SlotSegmentsSchema,
-                mode: "json",
-                temperature: 0.2,
-                system: SEGMENT_SYSTEM,
-                prompt: `Extract all teaching segments from this recording (${chunk.sourceAudio}):\n\n${chunkText}`,
-              });
-              return object.segments;
-            },
-          );
-
-          const rawSegmentsForSlot = chunkSegments.flat();
-
-          // Deduplicate segments that appeared in overlapping chunk windows.
-          const seenSegTopics = new Set<string>();
-          const dedupedSegs = rawSegmentsForSlot.filter((seg) => {
-            const key = seg.topic.toLowerCase().trim().slice(0, 60);
-            if (seenSegTopics.has(key)) return false;
-            seenSegTopics.add(key);
-            return true;
+          const chunkText = slotWords.slice(range.start, range.end).join(" ");
+          const { object } = await generateObject({
+            model: deepSeekModel,
+            schema: SlotSegmentsSchema,
+            mode: "json",
+            temperature: 0.2,
+            maxTokens: EXTRACTION_MAX_TOKENS,
+            maxRetries: 1,
+            abortSignal: AbortSignal.timeout(EXTRACTION_TIMEOUT_MS),
+            system: SEGMENT_SYSTEM,
+            prompt: `Extract all teaching segments from this recording (${chunk.sourceAudio}):\n\n${chunkText}`,
           });
-
-          return { chunk, slotWords, dedupedSegs };
-        } catch (slotErr) {
-          const message = slotErr instanceof Error ? slotErr.message : "Unknown extraction failure";
-          console.error(`[content-map] Slot ${chunk.sourceAudio} failed:`, slotErr);
-          return { chunk, slotWords: chunk.text.split(/\s+/), dedupedSegs: [], error: message };
+          return { sourceAudio: chunk.sourceAudio, segments: object.segments };
+        } catch (error) {
+          return {
+            sourceAudio: chunk.sourceAudio,
+            segments: [],
+            error: error instanceof Error ? error.message : "Unknown extraction failure",
+          };
         }
       },
     );
+
+    const slotResults: DedupedSlotResult[] = slotChunks.map((chunk) => {
+      const slotWords = chunk.text.split(/\s+/);
+      const results = extractionResults.filter((result) => result.sourceAudio === chunk.sourceAudio);
+      const failed = results.find((result) => result.error);
+      if (failed) {
+        console.error(`[content-map] Slot ${chunk.sourceAudio} failed: ${failed.error}`);
+        return { chunk, slotWords, dedupedSegs: [], error: failed.error };
+      }
+
+      const rawSegmentsForSlot = results.flatMap((result) => result.segments);
+
+      // Deduplicate segments that appeared in overlapping chunk windows.
+      const seenSegTopics = new Set<string>();
+      const dedupedSegs = rawSegmentsForSlot.filter((seg) => {
+        const key = seg.topic.toLowerCase().trim().slice(0, 60);
+        if (seenSegTopics.has(key)) return false;
+        seenSegTopics.add(key);
+        return true;
+      });
+
+      return { chunk, slotWords, dedupedSegs };
+    });
 
     const failedSlots = slotResults.filter((result) => result.error);
     if (failedSlots.length > 0) {
@@ -294,6 +309,9 @@ export async function POST(req: NextRequest) {
       schema: SynthesisSchema,
       mode: "json",
       temperature: 0.2,
+      maxTokens: SYNTHESIS_MAX_TOKENS,
+      maxRetries: 1,
+      abortSignal: AbortSignal.timeout(SYNTHESIS_TIMEOUT_MS),
       system: `You are a senior editor identifying the overarching message of a multi-part teaching series.
     Base your synthesis ONLY on what the speaker explicitly taught — do not add external theological context.
 
