@@ -13,10 +13,10 @@ export const maxDuration = 300;
 // the last ~37 % of each slot to be invisble to segment extraction.
 const MAX_SLOT_WORDS = 12000;
 const MAX_CONCURRENT_EXTRACTIONS = 5;
-const EXTRACTION_MAX_TOKENS = 2200;
+const EXTRACTION_MAX_TOKENS = 3000;
 const SYNTHESIS_MAX_TOKENS = 1200;
-const EXTRACTION_TIMEOUT_MS = 180_000;
-const SYNTHESIS_TIMEOUT_MS = 60_000;
+const EXTRACTION_TIMEOUT_MS = 240_000;
+const SYNTHESIS_TIMEOUT_MS = 180_000;
 
 async function mapWithConcurrency<T, R>(
   items: T[],
@@ -68,6 +68,27 @@ const SynthesisSchema = z.object({
   targetAudience: z.string().default(""),
   uniqueVocabulary: z.array(z.string()).default([]),
   toneMap: z.string().default(""),
+});
+
+const SourceAudioSchema = z.enum([
+  "audio-1", "audio-2", "audio-3", "audio-4", "audio-5",
+  "audio-6", "audio-7", "audio-8", "audio-9", "audio-10",
+]);
+
+const ExtractSlotRequestSchema = z.object({
+  operation: z.literal("extract-slot"),
+  sourceAudio: SourceAudioSchema,
+  transcript: z.string().min(100),
+});
+
+const SynthesizeRequestSchema = z.object({
+  operation: z.literal("synthesize"),
+  segments: z.array(z.object({
+    sourceAudio: SourceAudioSchema,
+    topic: z.string(),
+    keyPoints: z.array(z.string()).default([]),
+    estimatedWordCount: z.number(),
+  })).min(1),
 });
 
 const SEGMENT_SYSTEM = `You are a content analyst extracting teaching segments from a single sermon/teaching recording.
@@ -122,8 +143,131 @@ For every scripture or quote mentioned:
 
 DO NOT reproduce large blocks of transcript text. Focus on structure and meaning.`;
 
+async function extractSlot(sourceAudio: z.infer<typeof SourceAudioSchema>, transcript: string) {
+  const slotWords = transcript.split(/\s+/).filter(Boolean);
+  const ranges: Array<{ start: number; end: number }> = [];
+  const overlap = 200;
+  let start = 0;
+  while (start < slotWords.length) {
+    const end = Math.min(start + MAX_SLOT_WORDS, slotWords.length);
+    ranges.push({ start, end });
+    if (end === slotWords.length) break;
+    start = end - overlap;
+  }
+
+  const chunkSegments: z.infer<typeof SlotSegmentExtractSchema>[][] = [];
+  for (const range of ranges) {
+    const chunkText = slotWords.slice(range.start, range.end).join(" ");
+    const { object } = await generateObject({
+      model: deepSeekModel,
+      schema: SlotSegmentsSchema,
+      mode: "json",
+      temperature: 0.2,
+      maxTokens: EXTRACTION_MAX_TOKENS,
+      maxRetries: 2,
+      abortSignal: AbortSignal.timeout(EXTRACTION_TIMEOUT_MS),
+      system: SEGMENT_SYSTEM,
+      prompt: `Extract all teaching segments from this recording (${sourceAudio}):\n\n${chunkText}`,
+    });
+    chunkSegments.push(object.segments);
+  }
+
+  const seenTopics = new Set<string>();
+  const extracted = chunkSegments
+    .flat()
+    .filter((segment) => !segment.topic.includes("[NON-TEACHING") && segment.estimatedWordCount > 0)
+    .filter((segment) => {
+      const key = segment.topic.toLowerCase().trim().slice(0, 60);
+      if (seenTopics.has(key)) return false;
+      seenTopics.add(key);
+      return true;
+    });
+  if (extracted.length === 0) {
+    throw new Error(`${sourceAudio} returned no teaching segments`);
+  }
+
+  const totalEstimatedWords = extracted.reduce(
+    (sum, segment) => sum + Math.max(1, segment.estimatedWordCount),
+    0,
+  );
+  let wordOffset = 0;
+  let quoteCounter = 1;
+  const allQuotes: Array<z.infer<typeof QuoteSchema>> = [];
+  const segments = extracted.map((segment, index) => {
+    const sliceLength = index === extracted.length - 1
+      ? slotWords.length - wordOffset
+      : Math.round(slotWords.length * (Math.max(1, segment.estimatedWordCount) / totalEstimatedWords));
+    const rawText = slotWords.slice(wordOffset, wordOffset + sliceLength).join(" ");
+    wordOffset += sliceLength;
+    const quotes = segment.quotes.map((quote) => {
+      const hydrated = {
+        ...quote,
+        id: `q-${sourceAudio}-${quoteCounter++}`,
+        verified: false,
+      };
+      allQuotes.push(hydrated);
+      return hydrated;
+    });
+    return {
+      id: `seg-${sourceAudio}-${index + 1}`,
+      sourceAudio,
+      topic: segment.topic,
+      rawText,
+      keyPoints: segment.keyPoints,
+      quotes,
+      estimatedWordCount: rawText.split(/\s+/).filter(Boolean).length,
+    };
+  });
+
+  return { sourceAudio, segments, allQuotes };
+}
+
+async function synthesizeSegments(segments: z.infer<typeof SynthesizeRequestSchema>["segments"]) {
+  const topicSummary = segments
+    .map((segment) => `- [${segment.sourceAudio}] ${segment.topic}: ${segment.keyPoints.join("; ")}`)
+    .join("\n");
+  const { object } = await generateObject({
+    model: deepSeekModel,
+    schema: SynthesisSchema,
+    mode: "json",
+    temperature: 0.2,
+    maxTokens: SYNTHESIS_MAX_TOKENS,
+    maxRetries: 2,
+    abortSignal: AbortSignal.timeout(SYNTHESIS_TIMEOUT_MS),
+    system: `You are a senior editor identifying the overarching message of a multi-part teaching series.
+Base your synthesis ONLY on what the speaker explicitly taught. Identify the narrative north star, actual target audience, unique vocabulary, tone map, and coherent teaching arc. Consolidate recurring series recaps rather than treating them as new material.`,
+    prompt: `Synthesize these source-grounded teaching segments into the overall themes, teaching arc, core thesis, target audience, unique vocabulary, and tone map:\n\n${topicSummary}`,
+  });
+  return object;
+}
+
 export async function POST(req: NextRequest) {
   const body = await req.json() as unknown;
+  if (body && typeof body === "object" && "operation" in body) {
+    try {
+      if ((body as { operation?: unknown }).operation === "extract-slot") {
+        const input = ExtractSlotRequestSchema.parse(body);
+        return NextResponse.json(await extractSlot(input.sourceAudio, input.transcript), { status: 200 });
+      }
+      if ((body as { operation?: unknown }).operation === "synthesize") {
+        const input = SynthesizeRequestSchema.parse(body);
+        return NextResponse.json(await synthesizeSegments(input.segments), { status: 200 });
+      }
+      return NextResponse.json({ error: "Unsupported content-map operation" }, { status: 400 });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Content-map operation failed";
+      const operation = (body as { operation?: unknown }).operation;
+      const source = operation === "extract-slot" && "sourceAudio" in body
+        ? ` for ${String((body as { sourceAudio?: unknown }).sourceAudio)}`
+        : "";
+      return NextResponse.json({
+        route: "ebook/content-map",
+        error: `Content-map ${String(operation)} failed${source}`,
+        details: message,
+      }, { status: err instanceof z.ZodError ? 400 : 500 });
+    }
+  }
+
   let input;
   try {
     input = ContentMapRequestSchema.parse(body);

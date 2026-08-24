@@ -268,6 +268,7 @@ function sanitizeJobStateForPersistence(input: EbookJobState): EbookJobState {
     filterRemovedCount: 0,
     voiceDNA: null,
     contentMap: null,
+    contentMapSlots: [],
     architecture: null,
     sectionAssignments: [],
     sections: [],
@@ -2321,6 +2322,7 @@ export function EbookPipeline({
       filteredTranscript: fixStr((raw as EbookJobState & { filteredTranscript?: unknown }).filteredTranscript),
       voiceDNA,
       contentMap,
+      contentMapSlots: fixArrays(raw.contentMapSlots),
       architecture,
       sections,
       sectionAssignments,
@@ -2528,10 +2530,27 @@ export function EbookPipeline({
         addLog(`✓ Voice DNA captured`);
       }
 
-      const sourceContentMap = await postJson<ContentMap>("/api/ebook/content-map", {
-        masterTranscript: cleanedTranscript,
-        voiceDNA,
+      type ContentMapSlot = EbookJobState["contentMapSlots"][number];
+      type ContentMapSynthesis = Omit<ContentMap, "segments" | "allQuotes">;
+      const mappedSource = await postJson<ContentMapSlot>("/api/ebook/content-map", {
+        operation: "extract-slot",
+        sourceAudio: sourceId,
+        transcript: cleanedTranscript,
       });
+      const sourceSynthesis = await postJson<ContentMapSynthesis>("/api/ebook/content-map", {
+        operation: "synthesize",
+        segments: mappedSource.segments.map((segment) => ({
+          sourceAudio: segment.sourceAudio,
+          topic: segment.topic,
+          keyPoints: segment.keyPoints,
+          estimatedWordCount: segment.estimatedWordCount,
+        })),
+      });
+      const sourceContentMap: ContentMap = {
+        ...sourceSynthesis,
+        segments: mappedSource.segments,
+        allQuotes: mappedSource.allQuotes,
+      };
       addLog(`✓ Content mapped — ${sourceContentMap.segments.length} segments identified`);
 
       // Step 4: Find affected chapters and determine what needs restructuring
@@ -3003,6 +3022,7 @@ export function EbookPipeline({
           sectionAssignments: resume.sectionAssignments ?? [],
           sourceSlots: resume.sourceSlots ?? [],
           transcripts: resume.transcripts ?? [],
+          contentMapSlots: resume.contentMapSlots ?? [],
           errorLog: resume.errorLog ?? [],
         }
       : {
@@ -3025,6 +3045,7 @@ export function EbookPipeline({
           filterRemovedCount: 0,
           voiceDNA: null,
           contentMap: null,
+          contentMapSlots: [],
           architecture: null,
           sectionAssignments: [],
           sections: [],
@@ -3250,8 +3271,64 @@ export function EbookPipeline({
       let contentMap = acc.contentMap;
       if (!contentMap) {
         setStage("mapping");
-        addLog("Mapping content segments…");
-        contentMap = await postJson<ContentMap>("/api/ebook/content-map", { masterTranscript: teachingTranscript, voiceDNA });
+        type ContentMapSlot = EbookJobState["contentMapSlots"][number];
+        type ContentMapSynthesis = Omit<ContentMap, "segments" | "allQuotes">;
+        const sourceTranscripts = (acc.transcripts ?? []).flatMap((transcript) => {
+          const match = transcript.label.match(/^Slot-(\d+)$/);
+          const slot = match ? Number(match[1]) : 0;
+          if (slot < 1 || slot > 10 || !transcript.text.trim()) return [];
+          return [{
+            sourceAudio: `audio-${slot}` as ContentMapSlot["sourceAudio"],
+            transcript: transcript.text,
+          }];
+        });
+        if (sourceTranscripts.length === 0) {
+          throw new Error("Content mapping cannot resume because the saved per-slot transcripts are missing.");
+        }
+
+        let mappedSlots = acc.contentMapSlots ?? [];
+        if (mappedSlots.length > 0) {
+          addLog(`↩ Resuming content map — ${mappedSlots.length} / ${sourceTranscripts.length} recordings already mapped`);
+        } else {
+          addLog(`Mapping ${sourceTranscripts.length} recording${sourceTranscripts.length === 1 ? "" : "s"} independently…`);
+        }
+
+        for (const [index, source] of sourceTranscripts.entries()) {
+          if (mappedSlots.some((slot) => slot.sourceAudio === source.sourceAudio)) continue;
+          addLog(`Mapping ${source.sourceAudio} (${index + 1} / ${sourceTranscripts.length}) with the full model…`);
+          const mapped = await postJson<ContentMapSlot>("/api/ebook/content-map", {
+            operation: "extract-slot",
+            sourceAudio: source.sourceAudio,
+            transcript: source.transcript,
+          });
+          mappedSlots = [
+            ...mappedSlots.filter((slot) => slot.sourceAudio !== mapped.sourceAudio),
+            mapped,
+          ].sort((left, right) => left.sourceAudio.localeCompare(right.sourceAudio, undefined, { numeric: true }));
+          acc.contentMapSlots = mappedSlots;
+          addLog(`✓ ${mapped.sourceAudio} mapped — ${mapped.segments.length} teaching segments`);
+          await checkpoint("mapping");
+        }
+
+        const mappedSegments = mappedSlots.flatMap((slot) => slot.segments);
+        if (mappedSegments.length === 0) {
+          throw new Error("Content mapping returned no teaching segments.");
+        }
+        addLog("Synthesizing the cross-recording content map with the full model…");
+        const synthesis = await postJson<ContentMapSynthesis>("/api/ebook/content-map", {
+          operation: "synthesize",
+          segments: mappedSegments.map((segment) => ({
+            sourceAudio: segment.sourceAudio,
+            topic: segment.topic,
+            keyPoints: segment.keyPoints,
+            estimatedWordCount: segment.estimatedWordCount,
+          })),
+        });
+        contentMap = {
+          ...synthesis,
+          segments: mappedSegments,
+          allQuotes: mappedSlots.flatMap((slot) => slot.allQuotes),
+        };
         addLog(`✓ Content mapped — ${contentMap.segments.length} segments, ${contentMap.allQuotes.length} scriptures/quotes`);
         acc.contentMap = contentMap;
         await checkpoint("architecting");
