@@ -20,7 +20,7 @@ import {
   generateEbookProjectId,
 } from "@/lib/ebook-project-store";
 import type { EbookProject } from "@/lib/ebook-project-store";
-import { getEbookJob, listEbookJobs } from "@/lib/ebook-job-store";
+import { clearEbookJobs, getEbookJob, listEbookJobs } from "@/lib/ebook-job-store";
 
 const JOB_STATE_KEY = "nexus_ebook_job_state";
 const JOB_STORAGE_KEY = "nexus_ebook_current_job"; // IndexedDB job-ID pointer
@@ -762,19 +762,31 @@ function EbookPageClient() {
     URL.revokeObjectURL(url);
   }, [ebookManifest]);
 
-  const handleStartFreshProject = useCallback(() => {
+  const handleStartFreshProject = useCallback(async () => {
     const confirmed = window.confirm(
       "Start a fresh book project? This will clear the current in-progress pipeline from this screen, but your saved projects will remain available."
     );
     if (!confirmed) return;
 
     try {
+      // Clear all resumable pipeline checkpoints so nothing can restart in the background.
+      await clearEbookJobs();
+
       localStorage.removeItem(JOB_STATE_KEY);
       localStorage.removeItem(PENDING_MOUNT_KEY);
-      // Clear the job-ID pointer so the remounted pipeline doesn't restore
-      // the old job from IndexedDB. Previously this key was left behind, causing
-      // the pipeline to silently reload the previous project's state on remount.
-      localStorage.removeItem("nexus_ebook_current_job");
+      localStorage.removeItem(JOB_STORAGE_KEY);
+
+      // Clear cached narration artifacts tied to past pipeline jobs.
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < localStorage.length; i += 1) {
+        const key = localStorage.key(i);
+        if (key?.startsWith(VOICE_STUDIO_STORAGE_PREFIX)) {
+          keysToRemove.push(key);
+        }
+      }
+      for (const key of keysToRemove) {
+        localStorage.removeItem(key);
+      }
     } catch {
       // localStorage unavailable; in-memory reset still applies
     }
@@ -788,9 +800,9 @@ function EbookPageClient() {
     setAssistantOpen(false);
     setActiveTab("pipeline");
     setPipelineKey((k) => k + 1);
-    setStatusMsg({ type: "success", text: "Started a fresh book project." });
-    router.replace("/ebook?tab=pipeline");
-  }, [router]);
+    // Hard reload guarantees all in-flight fetches from the previous run are terminated.
+    window.location.replace("/ebook?tab=pipeline");
+  }, []);
 
   const handleContinuePipeline = useCallback(async () => {
     // The mounted pipeline reports every checkpoint through onJobStateChange.
@@ -864,7 +876,7 @@ function EbookPageClient() {
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
-                    onClick={handleStartFreshProject}
+                    onClick={() => { void handleStartFreshProject(); }}
                     className="flex min-h-12 items-center gap-2 rounded-xl border border-amber-500/35 bg-amber-500/10 px-3.5 py-2 text-xs font-semibold text-amber-300 transition hover:border-amber-400/60 hover:bg-amber-500/15 active:scale-[0.97]"
                   >
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-4 w-4">

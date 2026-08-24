@@ -123,6 +123,16 @@ export async function deleteEbookJob(jobId: string): Promise<void> {
   });
 }
 
+export async function clearEbookJobs(): Promise<void> {
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, "readwrite");
+    tx.objectStore(STORE_NAME).clear();
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
 export function newJobId(): string {
   return `ebook-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
