@@ -71,12 +71,6 @@ export const ContentMapSchema = z.object({
   allQuotes: z.array(QuoteSchema).default([]), // full quote/scripture registry
 });
 
-export const ContentMapSlotSchema = z.object({
-  sourceAudio: ContentSegmentSchema.shape.sourceAudio,
-  segments: z.array(ContentSegmentSchema),
-  allQuotes: z.array(QuoteSchema).default([]),
-});
-
 // ─── Section Blueprint (from architect) ──────────────────────────────────────
 
 export const SectionBlueprintSchema = z.object({
@@ -463,7 +457,6 @@ export const EbookJobStateSchema = z.object({
   filterRemovedCount: z.number().default(0),  // number of non-teaching blocks removed
   voiceDNA: VoiceDNASchema.nullable().default(null),
   contentMap: ContentMapSchema.nullable().default(null),
-  contentMapSlots: z.array(ContentMapSlotSchema).default([]),
   architecture: BookArchitectureSchema.nullable().default(null),
   sectionAssignments: z.array(SectionAssignmentSchema).default([]),
   sections: z.array(SectionDraftSchema).default([]),

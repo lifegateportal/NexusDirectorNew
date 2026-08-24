@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { generateObject, generateText } from "ai";
+import { generateObject } from "ai";
 import { z } from "zod";
 import { deepSeekModel } from "@/lib/ai-providers";
 import { ContentMapRequestSchema, QuoteSchema } from "@/lib/schemas/ebook";
@@ -12,32 +12,6 @@ export const maxDuration = 300;
 // hitting DeepSeek's context limit, and prevents the truncation that was causing
 // the last ~37 % of each slot to be invisble to segment extraction.
 const MAX_SLOT_WORDS = 12000;
-const MAX_CONCURRENT_EXTRACTIONS = 5;
-const EXTRACTION_MAX_TOKENS = 3000;
-const SYNTHESIS_MAX_TOKENS = 1200;
-const EXTRACTION_TIMEOUT_MS = 240_000;
-const SYNTHESIS_TIMEOUT_MS = 180_000;
-
-async function mapWithConcurrency<T, R>(
-  items: T[],
-  limit: number,
-  worker: (item: T) => Promise<R>,
-): Promise<R[]> {
-  const results = new Array<R>(items.length);
-  let nextIndex = 0;
-
-  async function runWorker() {
-    while (nextIndex < items.length) {
-      const index = nextIndex++;
-      results[index] = await worker(items[index]);
-    }
-  }
-
-  await Promise.all(
-    Array.from({ length: Math.min(limit, items.length) }, () => runWorker()),
-  );
-  return results;
-}
 
 // Per-slot extraction schema — NO rawText (LLM must not copy back large text blobs)
 const SlotSegmentExtractSchema = z.object({
@@ -68,27 +42,6 @@ const SynthesisSchema = z.object({
   targetAudience: z.string().default(""),
   uniqueVocabulary: z.array(z.string()).default([]),
   toneMap: z.string().default(""),
-});
-
-const SourceAudioSchema = z.enum([
-  "audio-1", "audio-2", "audio-3", "audio-4", "audio-5",
-  "audio-6", "audio-7", "audio-8", "audio-9", "audio-10",
-]);
-
-const ExtractSlotRequestSchema = z.object({
-  operation: z.literal("extract-slot"),
-  sourceAudio: SourceAudioSchema,
-  transcript: z.string().min(100),
-});
-
-const SynthesizeRequestSchema = z.object({
-  operation: z.literal("synthesize"),
-  segments: z.array(z.object({
-    sourceAudio: SourceAudioSchema,
-    topic: z.string(),
-    keyPoints: z.array(z.string()).default([]),
-    estimatedWordCount: z.number(),
-  })).min(1),
 });
 
 const SEGMENT_SYSTEM = `You are a content analyst extracting teaching segments from a single sermon/teaching recording.
@@ -143,203 +96,8 @@ For every scripture or quote mentioned:
 
 DO NOT reproduce large blocks of transcript text. Focus on structure and meaning.`;
 
-function parseJsonObject(raw: string): unknown {
-  const text = raw
-    .trim()
-    .replace(/^```(?:json)?\s*/i, "")
-    .replace(/\s*```$/i, "");
-  const start = text.indexOf("{");
-  if (start < 0) throw new Error("No JSON object found in model response");
-
-  let inString = false;
-  let escaped = false;
-  const stack: string[] = [];
-  for (let index = start; index < text.length; index++) {
-    const char = text[index];
-    if (inString) {
-      if (escaped) escaped = false;
-      else if (char === "\\") escaped = true;
-      else if (char === '"') inString = false;
-      continue;
-    }
-    if (char === '"') {
-      inString = true;
-      continue;
-    }
-    if (char === "{") stack.push("}");
-    else if (char === "[") stack.push("]");
-    else if (char === "}" || char === "]") {
-      const expected = stack.pop();
-      if (expected !== char) continue;
-      if (stack.length === 0) return JSON.parse(text.slice(start, index + 1));
-    }
-  }
-
-  let repaired = text.slice(start).trim();
-  if (inString && !escaped) repaired += '"';
-  repaired += stack.slice().reverse().join("");
-  return JSON.parse(repaired.replace(/,\s*([}\]])/g, "$1"));
-}
-
-async function generateStructuredObject<TSchema extends z.ZodTypeAny>(options: {
-  schema: TSchema;
-  system: string;
-  prompt: string;
-  maxTokens: number;
-  timeoutMs: number;
-}): Promise<z.output<TSchema>> {
-  try {
-    const { object } = await generateObject({
-      model: deepSeekModel,
-      schema: options.schema,
-      mode: "json",
-      temperature: 0.2,
-      maxTokens: options.maxTokens,
-      maxRetries: 2,
-      abortSignal: AbortSignal.timeout(options.timeoutMs),
-      system: options.system,
-      prompt: options.prompt,
-    });
-    return options.schema.parse(object);
-  } catch (objectError) {
-    const message = objectError instanceof Error ? objectError.message.toLowerCase() : "";
-    const isTimeout = objectError instanceof Error && (
-      objectError.name === "AbortError" ||
-      message.includes("abort") ||
-      message.includes("timed out") ||
-      message.includes("timeout")
-    );
-    if (isTimeout) throw objectError;
-    console.warn("[content-map] Structured output failed; retrying as strict JSON text:", objectError);
-    const { text } = await generateText({
-      model: deepSeekModel,
-      temperature: 0.2,
-      maxTokens: options.maxTokens,
-      maxRetries: 2,
-      abortSignal: AbortSignal.timeout(options.timeoutMs),
-      system: `${options.system}\n\nReturn ONLY one valid JSON object matching the requested schema. No markdown fences or commentary.`,
-      prompt: options.prompt,
-    });
-    return options.schema.parse(parseJsonObject(text));
-  }
-}
-
-async function extractSlot(sourceAudio: z.infer<typeof SourceAudioSchema>, transcript: string) {
-  const slotWords = transcript.split(/\s+/).filter(Boolean);
-  const ranges: Array<{ start: number; end: number }> = [];
-  const overlap = 200;
-  let start = 0;
-  while (start < slotWords.length) {
-    const end = Math.min(start + MAX_SLOT_WORDS, slotWords.length);
-    ranges.push({ start, end });
-    if (end === slotWords.length) break;
-    start = end - overlap;
-  }
-
-  const chunkSegments: z.infer<typeof SlotSegmentExtractSchema>[][] = [];
-  for (const range of ranges) {
-    const chunkText = slotWords.slice(range.start, range.end).join(" ");
-    const object = await generateStructuredObject({
-      schema: SlotSegmentsSchema,
-      maxTokens: EXTRACTION_MAX_TOKENS,
-      timeoutMs: EXTRACTION_TIMEOUT_MS,
-      system: SEGMENT_SYSTEM,
-      prompt: `Extract all teaching segments from this recording (${sourceAudio}). Return {"segments":[{"topic":string,"keyPoints":string[],"quotes":[{"text":string,"reference":string,"translation":string,"type":"scripture"|"quote"|"proverb","isBlockQuote":boolean}],"estimatedWordCount":number}]}.\n\n${chunkText}`,
-    });
-    chunkSegments.push(object.segments);
-  }
-
-  const seenTopics = new Set<string>();
-  const extracted = chunkSegments
-    .flat()
-    .filter((segment) => !segment.topic.includes("[NON-TEACHING") && segment.estimatedWordCount > 0)
-    .filter((segment) => {
-      const key = segment.topic.toLowerCase().trim().slice(0, 60);
-      if (seenTopics.has(key)) return false;
-      seenTopics.add(key);
-      return true;
-    });
-  if (extracted.length === 0) {
-    throw new Error(`${sourceAudio} returned no teaching segments`);
-  }
-
-  const totalEstimatedWords = extracted.reduce(
-    (sum, segment) => sum + Math.max(1, segment.estimatedWordCount),
-    0,
-  );
-  let wordOffset = 0;
-  let quoteCounter = 1;
-  const allQuotes: Array<z.infer<typeof QuoteSchema>> = [];
-  const segments = extracted.map((segment, index) => {
-    const sliceLength = index === extracted.length - 1
-      ? slotWords.length - wordOffset
-      : Math.round(slotWords.length * (Math.max(1, segment.estimatedWordCount) / totalEstimatedWords));
-    const rawText = slotWords.slice(wordOffset, wordOffset + sliceLength).join(" ");
-    wordOffset += sliceLength;
-    const quotes = segment.quotes.map((quote) => {
-      const hydrated = {
-        ...quote,
-        id: `q-${sourceAudio}-${quoteCounter++}`,
-        verified: false,
-      };
-      allQuotes.push(hydrated);
-      return hydrated;
-    });
-    return {
-      id: `seg-${sourceAudio}-${index + 1}`,
-      sourceAudio,
-      topic: segment.topic,
-      rawText,
-      keyPoints: segment.keyPoints,
-      quotes,
-      estimatedWordCount: rawText.split(/\s+/).filter(Boolean).length,
-    };
-  });
-
-  return { sourceAudio, segments, allQuotes };
-}
-
-async function synthesizeSegments(segments: z.infer<typeof SynthesizeRequestSchema>["segments"]) {
-  const topicSummary = segments
-    .map((segment) => `- [${segment.sourceAudio}] ${segment.topic}: ${segment.keyPoints.join("; ")}`)
-    .join("\n");
-  return generateStructuredObject({
-    schema: SynthesisSchema,
-    maxTokens: SYNTHESIS_MAX_TOKENS,
-    timeoutMs: SYNTHESIS_TIMEOUT_MS,
-    system: `You are a senior editor identifying the overarching message of a multi-part teaching series.
-Base your synthesis ONLY on what the speaker explicitly taught. Identify the narrative north star, actual target audience, unique vocabulary, tone map, and coherent teaching arc. Consolidate recurring series recaps rather than treating them as new material.`,
-    prompt: `Synthesize these source-grounded teaching segments. Return {"totalEstimatedWords":number,"overarchingThemes":string[],"teachingArc":string,"coreThesis":string,"targetAudience":string,"uniqueVocabulary":string[],"toneMap":string}.\n\n${topicSummary}`,
-  });
-}
-
 export async function POST(req: NextRequest) {
   const body = await req.json() as unknown;
-  if (body && typeof body === "object" && "operation" in body) {
-    try {
-      if ((body as { operation?: unknown }).operation === "extract-slot") {
-        const input = ExtractSlotRequestSchema.parse(body);
-        return NextResponse.json(await extractSlot(input.sourceAudio, input.transcript), { status: 200 });
-      }
-      if ((body as { operation?: unknown }).operation === "synthesize") {
-        const input = SynthesizeRequestSchema.parse(body);
-        return NextResponse.json(await synthesizeSegments(input.segments), { status: 200 });
-      }
-      return NextResponse.json({ error: "Unsupported content-map operation" }, { status: 400 });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Content-map operation failed";
-      const operation = (body as { operation?: unknown }).operation;
-      const source = operation === "extract-slot" && "sourceAudio" in body
-        ? ` for ${String((body as { sourceAudio?: unknown }).sourceAudio)}`
-        : "";
-      return NextResponse.json({
-        route: "ebook/content-map",
-        error: `Content-map ${String(operation)} failed${source}`,
-        details: message,
-      }, { status: err instanceof z.ZodError ? 400 : 500 });
-    }
-  }
-
   let input;
   try {
     input = ContentMapRequestSchema.parse(body);
@@ -383,80 +141,57 @@ export async function POST(req: NextRequest) {
       chunk: { sourceAudio: string; text: string };
       slotWords: string[];
       dedupedSegs: z.infer<typeof SlotSegmentExtractSchema>[];
-      error?: string;
     };
 
-    const extractionTasks = slotChunks.flatMap((chunk) => {
-      const slotWords = chunk.text.split(/\s+/);
-      const ranges: Array<{ start: number; end: number }> = [];
-      const overlap = 200;
-      let start = 0;
-      while (start < slotWords.length) {
-        const end = Math.min(start + MAX_SLOT_WORDS, slotWords.length);
-        ranges.push({ start, end });
-        if (end === slotWords.length) break;
-        start = end - overlap;
-      }
-      return ranges.map((range) => ({ chunk, slotWords, range }));
-    });
-
-    const extractionResults = await mapWithConcurrency(
-      extractionTasks,
-      MAX_CONCURRENT_EXTRACTIONS,
-      async ({ chunk, slotWords, range }) => {
+    const slotResults: DedupedSlotResult[] = await Promise.all(
+      slotChunks.map(async (chunk): Promise<DedupedSlotResult> => {
+        // A8: Isolate per-slot failures — a single bad LLM call must not abort the whole map
         try {
-          const chunkText = slotWords.slice(range.start, range.end).join(" ");
-          const { object } = await generateObject({
-            model: deepSeekModel,
-            schema: SlotSegmentsSchema,
-            mode: "json",
-            temperature: 0.2,
-            maxTokens: EXTRACTION_MAX_TOKENS,
-            maxRetries: 1,
-            abortSignal: AbortSignal.timeout(EXTRACTION_TIMEOUT_MS),
-            system: SEGMENT_SYSTEM,
-            prompt: `Extract all teaching segments from this recording (${chunk.sourceAudio}):\n\n${chunkText}`,
+          const slotWords = chunk.text.split(/\s+/);
+          const OVERLAP = 200;
+          const chunkRanges: Array<{ start: number; end: number }> = [];
+          let start = 0;
+          while (start < slotWords.length) {
+            const end = Math.min(start + MAX_SLOT_WORDS, slotWords.length);
+            chunkRanges.push({ start, end });
+            if (end === slotWords.length) break;
+            start = end - OVERLAP;
+          }
+
+          // Process all chunk ranges within this slot in parallel too.
+          const chunkSegments = await Promise.all(
+            chunkRanges.map(async (range) => {
+              const chunkText = slotWords.slice(range.start, range.end).join(" ");
+              const { object } = await generateObject({
+                model: deepSeekModel,
+                schema: SlotSegmentsSchema,
+                mode: "json",
+                temperature: 0.2,
+                system: SEGMENT_SYSTEM,
+                prompt: `Extract all teaching segments from this recording (${chunk.sourceAudio}):\n\n${chunkText}`,
+              });
+              return object.segments;
+            })
+          );
+
+          const rawSegmentsForSlot = chunkSegments.flat();
+
+          // Deduplicate segments that appeared in overlapping chunk windows.
+          const seenSegTopics = new Set<string>();
+          const dedupedSegs = rawSegmentsForSlot.filter((seg) => {
+            const key = seg.topic.toLowerCase().trim().slice(0, 60);
+            if (seenSegTopics.has(key)) return false;
+            seenSegTopics.add(key);
+            return true;
           });
-          return { sourceAudio: chunk.sourceAudio, segments: object.segments };
-        } catch (error) {
-          return {
-            sourceAudio: chunk.sourceAudio,
-            segments: [],
-            error: error instanceof Error ? error.message : "Unknown extraction failure",
-          };
+
+          return { chunk, slotWords, dedupedSegs };
+        } catch (slotErr) {
+          console.error(`[content-map] Slot ${chunk.sourceAudio} failed — returning empty segments:`, slotErr);
+          return { chunk, slotWords: chunk.text.split(/\s+/), dedupedSegs: [] };
         }
-      },
+      })
     );
-
-    const slotResults: DedupedSlotResult[] = slotChunks.map((chunk) => {
-      const slotWords = chunk.text.split(/\s+/);
-      const results = extractionResults.filter((result) => result.sourceAudio === chunk.sourceAudio);
-      const failed = results.find((result) => result.error);
-      if (failed) {
-        console.error(`[content-map] Slot ${chunk.sourceAudio} failed: ${failed.error}`);
-        return { chunk, slotWords, dedupedSegs: [], error: failed.error };
-      }
-
-      const rawSegmentsForSlot = results.flatMap((result) => result.segments);
-
-      // Deduplicate segments that appeared in overlapping chunk windows.
-      const seenSegTopics = new Set<string>();
-      const dedupedSegs = rawSegmentsForSlot.filter((seg) => {
-        const key = seg.topic.toLowerCase().trim().slice(0, 60);
-        if (seenSegTopics.has(key)) return false;
-        seenSegTopics.add(key);
-        return true;
-      });
-
-      return { chunk, slotWords, dedupedSegs };
-    });
-
-    const failedSlots = slotResults.filter((result) => result.error);
-    if (failedSlots.length > 0) {
-      throw new Error(
-        `Content extraction failed for ${failedSlots.map((result) => result.chunk.sourceAudio).join(", ")}. No recordings were discarded; retry this stage.`,
-      );
-    }
 
     // ── Assemble segments sequentially so IDs are deterministic ──────────────
     let segmentIdCounter = 1;
@@ -525,9 +260,6 @@ export async function POST(req: NextRequest) {
       schema: SynthesisSchema,
       mode: "json",
       temperature: 0.2,
-      maxTokens: SYNTHESIS_MAX_TOKENS,
-      maxRetries: 1,
-      abortSignal: AbortSignal.timeout(SYNTHESIS_TIMEOUT_MS),
       system: `You are a senior editor identifying the overarching message of a multi-part teaching series.
     Base your synthesis ONLY on what the speaker explicitly taught — do not add external theological context.
 

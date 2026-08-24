@@ -107,31 +107,36 @@ function parseSignalFilterLog(logEntries: string[]): { state: SignalFilterState;
 
 async function postJson<T>(url: string, body: unknown, retries = 1): Promise<T> {
   const route = routeLabel(url);
-  const requestTimeoutMs = 290_000;
-  const retryableStatuses = new Set([429, 500, 502, 503, 504]);
+  const isContentMap = url === "/api/ebook/content-map";
+  const requestTimeoutMs = isContentMap ? null : 290_000;
+  const retryableStatuses = isContentMap
+    ? new Set([401, 502, 503, 504])
+    : new Set([429, 500, 502, 503, 504]);
   for (let attempt = 0; attempt <= retries; attempt++) {
     let res: Response;
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
+    const timeout = requestTimeoutMs === null
+      ? null
+      : setTimeout(() => controller.abort(), requestTimeoutMs);
     try {
       res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
-        signal: controller.signal,
+        signal: requestTimeoutMs === null ? undefined : controller.signal,
       });
     } catch (err) {
-      clearTimeout(timeout);
-      if (attempt < retries) {
+      if (timeout !== null) clearTimeout(timeout);
+      if (!isContentMap && attempt < retries) {
         await new Promise<void>((resolve) => setTimeout(resolve, 1500 * (attempt + 1)));
         continue;
       }
       const cause = err instanceof DOMException && err.name === "AbortError"
-        ? `timed out after ${Math.round(requestTimeoutMs / 1000)} seconds`
+        ? `timed out after ${Math.round((requestTimeoutMs ?? 0) / 1000)} seconds`
         : err instanceof Error ? err.message : "Unknown network failure";
       throw new Error([`Request failed: ${route}`, `Cause: ${cause}`].join("\n"));
     }
-    clearTimeout(timeout);
+    if (timeout !== null) clearTimeout(timeout);
     if (!res.ok) {
       const rawText = await res.text();
       let err: { error?: string; details?: string; route?: string } = {};
@@ -143,9 +148,11 @@ async function postJson<T>(url: string, body: unknown, retries = 1): Promise<T> 
       const msg = err.error || `HTTP ${res.status} error from ${route}`;
       if (attempt < retries && retryableStatuses.has(res.status)) {
         const retryAfterSeconds = Number(res.headers.get("Retry-After"));
-        const delayMs = Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
-          ? retryAfterSeconds * 1000
-          : 1500 * (attempt + 1);
+        const delayMs = isContentMap
+          ? 3000
+          : Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
+            ? retryAfterSeconds * 1000
+            : 1500 * (attempt + 1);
         await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
         continue;
       }
@@ -220,22 +227,6 @@ function countWords(text: string): number {
   return text.trim().split(/\s+/).filter(Boolean).length;
 }
 
-function extractLabeledTranscripts(masterTranscript: string): Array<{ label: string; text: string }> {
-  const headerPattern = /\[Slot-(\d+)\]/g;
-  const headers = [...masterTranscript.matchAll(headerPattern)];
-  return headers.flatMap((header, index) => {
-    const slot = Number(header[1]);
-    const contentStart = (header.index ?? 0) + header[0].length;
-    const contentEnd = headers[index + 1]?.index ?? masterTranscript.length;
-    const text = masterTranscript
-      .slice(contentStart, contentEnd)
-      .replace(/^\s*═{3,}\s*/, "")
-      .replace(/\s*═{3,}\s*$/, "")
-      .trim();
-    return slot >= 1 && slot <= 10 && text ? [{ label: `Slot-${slot}`, text }] : [];
-  });
-}
-
 function toIsoOrNow(value: unknown, nowIso: string): string {
   if (typeof value !== "string") return nowIso;
   const ts = Date.parse(value);
@@ -284,7 +275,6 @@ function sanitizeJobStateForPersistence(input: EbookJobState): EbookJobState {
     filterRemovedCount: 0,
     voiceDNA: null,
     contentMap: null,
-    contentMapSlots: [],
     architecture: null,
     sectionAssignments: [],
     sections: [],
@@ -2235,16 +2225,12 @@ export function EbookPipeline({
   function normalizeJob(raw: EbookJobState): EbookJobState {
     const fixArrays = <T,>(v: unknown): T[] => (Array.isArray(v) ? v as T[] : []);
     const fixStr = (v: unknown, fb = ""): string => (typeof v === "string" ? v : fb);
-    const persistedTranscripts = fixArrays<Record<string, unknown>>(raw.transcripts as unknown)
+    const transcripts = fixArrays<Record<string, unknown>>(raw.transcripts as unknown)
       .map((t) => ({
         label: fixStr(t.label),
         text: fixStr(t.text),
       }))
       .filter((t) => t.text);
-    const rawMasterTranscript = fixStr(raw.masterTranscript);
-    const transcripts = persistedTranscripts.length > 0
-      ? persistedTranscripts
-      : extractLabeledTranscripts(rawMasterTranscript);
     const rebuiltMasterTranscript = transcripts
       .map((t) => `[${t.label}]\n${t.text}`)
       .join("\n\n═══════════════════════════════════════\n\n");
@@ -2338,11 +2324,10 @@ export function EbookPipeline({
       audioFileNames: fixArrays(raw.audioFileNames),
       sourceSlots: fixArrays(raw.sourceSlots),
       transcripts,
-      masterTranscript: rawMasterTranscript || rebuiltMasterTranscript,
+      masterTranscript: fixStr(raw.masterTranscript, rebuiltMasterTranscript),
       filteredTranscript: fixStr((raw as EbookJobState & { filteredTranscript?: unknown }).filteredTranscript),
       voiceDNA,
       contentMap,
-      contentMapSlots: fixArrays(raw.contentMapSlots),
       architecture,
       sections,
       sectionAssignments,
@@ -2550,27 +2535,10 @@ export function EbookPipeline({
         addLog(`✓ Voice DNA captured`);
       }
 
-      type ContentMapSlot = EbookJobState["contentMapSlots"][number];
-      type ContentMapSynthesis = Omit<ContentMap, "segments" | "allQuotes">;
-      const mappedSource = await postJson<ContentMapSlot>("/api/ebook/content-map", {
-        operation: "extract-slot",
-        sourceAudio: sourceId,
-        transcript: cleanedTranscript,
+      const sourceContentMap = await postJson<ContentMap>("/api/ebook/content-map", {
+        masterTranscript: cleanedTranscript,
+        voiceDNA,
       });
-      const sourceSynthesis = await postJson<ContentMapSynthesis>("/api/ebook/content-map", {
-        operation: "synthesize",
-        segments: mappedSource.segments.map((segment) => ({
-          sourceAudio: segment.sourceAudio,
-          topic: segment.topic,
-          keyPoints: segment.keyPoints,
-          estimatedWordCount: segment.estimatedWordCount,
-        })),
-      });
-      const sourceContentMap: ContentMap = {
-        ...sourceSynthesis,
-        segments: mappedSource.segments,
-        allQuotes: mappedSource.allQuotes,
-      };
       addLog(`✓ Content mapped — ${sourceContentMap.segments.length} segments identified`);
 
       // Step 4: Find affected chapters and determine what needs restructuring
@@ -3042,7 +3010,6 @@ export function EbookPipeline({
           sectionAssignments: resume.sectionAssignments ?? [],
           sourceSlots: resume.sourceSlots ?? [],
           transcripts: resume.transcripts ?? [],
-          contentMapSlots: resume.contentMapSlots ?? [],
           errorLog: resume.errorLog ?? [],
         }
       : {
@@ -3065,7 +3032,6 @@ export function EbookPipeline({
           filterRemovedCount: 0,
           voiceDNA: null,
           contentMap: null,
-          contentMapSlots: [],
           architecture: null,
           sectionAssignments: [],
           sections: [],
@@ -3291,73 +3257,8 @@ export function EbookPipeline({
       let contentMap = acc.contentMap;
       if (!contentMap) {
         setStage("mapping");
-        type ContentMapSlot = EbookJobState["contentMapSlots"][number];
-        type ContentMapSynthesis = Omit<ContentMap, "segments" | "allQuotes">;
-        const resumableTranscripts = (acc.transcripts?.length ?? 0) > 0
-          ? acc.transcripts
-          : extractLabeledTranscripts(acc.masterTranscript || teachingTranscript);
-        if ((acc.transcripts?.length ?? 0) === 0 && resumableTranscripts.length > 0) {
-          acc.transcripts = resumableTranscripts;
-          setSourceTranscripts(resumableTranscripts);
-          addLog(`↩ Recovered ${resumableTranscripts.length} per-slot transcripts from the saved master transcript`);
-          await checkpoint("mapping");
-        }
-        const sourceTranscripts = resumableTranscripts.flatMap((transcript) => {
-          const match = transcript.label.match(/^Slot-(\d+)$/);
-          const slot = match ? Number(match[1]) : 0;
-          if (slot < 1 || slot > 10 || !transcript.text.trim()) return [];
-          return [{
-            sourceAudio: `audio-${slot}` as ContentMapSlot["sourceAudio"],
-            transcript: transcript.text,
-          }];
-        });
-        if (sourceTranscripts.length === 0) {
-          throw new Error("Content mapping cannot resume because the saved per-slot transcripts are missing.");
-        }
-
-        let mappedSlots = acc.contentMapSlots ?? [];
-        if (mappedSlots.length > 0) {
-          addLog(`↩ Resuming content map — ${mappedSlots.length} / ${sourceTranscripts.length} recordings already mapped`);
-        } else {
-          addLog(`Mapping ${sourceTranscripts.length} recording${sourceTranscripts.length === 1 ? "" : "s"} independently…`);
-        }
-
-        for (const [index, source] of sourceTranscripts.entries()) {
-          if (mappedSlots.some((slot) => slot.sourceAudio === source.sourceAudio)) continue;
-          addLog(`Mapping ${source.sourceAudio} (${index + 1} / ${sourceTranscripts.length}) with the full model…`);
-          const mapped = await postJson<ContentMapSlot>("/api/ebook/content-map", {
-            operation: "extract-slot",
-            sourceAudio: source.sourceAudio,
-            transcript: source.transcript,
-          });
-          mappedSlots = [
-            ...mappedSlots.filter((slot) => slot.sourceAudio !== mapped.sourceAudio),
-            mapped,
-          ].sort((left, right) => left.sourceAudio.localeCompare(right.sourceAudio, undefined, { numeric: true }));
-          acc.contentMapSlots = mappedSlots;
-          addLog(`✓ ${mapped.sourceAudio} mapped — ${mapped.segments.length} teaching segments`);
-          await checkpoint("mapping");
-        }
-
-        const mappedSegments = mappedSlots.flatMap((slot) => slot.segments);
-        if (mappedSegments.length === 0) {
-          throw new Error("Content mapping returned no teaching segments.");
-        }
-        addLog("Synthesizing the cross-recording content map with the full model…");
-        const synthesis = await postJson<ContentMapSynthesis>("/api/ebook/content-map", {
-          operation: "synthesize",
-          segments: mappedSegments.map((segment) => ({
-            sourceAudio: segment.sourceAudio,
-            topic: segment.topic,
-            keyPoints: segment.keyPoints,
-            estimatedWordCount: segment.estimatedWordCount,
-          })),
-        });
-        contentMap = {
-          ...synthesis,
-          segments: mappedSegments,
-          allQuotes: mappedSlots.flatMap((slot) => slot.allQuotes),
-        };
+        addLog("Mapping content segments…");
+        contentMap = await postJson<ContentMap>("/api/ebook/content-map", { masterTranscript: teachingTranscript, voiceDNA });
         addLog(`✓ Content mapped — ${contentMap.segments.length} segments, ${contentMap.allQuotes.length} scriptures/quotes`);
         acc.contentMap = contentMap;
         await checkpoint("architecting");
