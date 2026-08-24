@@ -2315,6 +2315,7 @@ export function EbookPipeline({
     return {
       ...raw,
       audioFileNames: fixArrays(raw.audioFileNames),
+      sourceSlots: fixArrays(raw.sourceSlots),
       transcripts,
       masterTranscript: fixStr(raw.masterTranscript, rebuiltMasterTranscript),
       filteredTranscript: fixStr((raw as EbookJobState & { filteredTranscript?: unknown }).filteredTranscript),
@@ -2996,6 +2997,7 @@ export function EbookPipeline({
           status: "transcribing",
           updatedAt: now,
           // Guard against old persisted jobs that may be missing array fields
+          audioFileNames: resume.audioFileNames ?? [],
           chapters: resume.chapters ?? [],
           sections: resume.sections ?? [],
           sectionAssignments: resume.sectionAssignments ?? [],
@@ -4299,13 +4301,13 @@ export function EbookPipeline({
   const hasResumableState = Boolean(
     savedJobRef.current && (
       savedJobRef.current.masterTranscript ||
-      savedJobRef.current.transcripts.length > 0 ||
+      (savedJobRef.current.transcripts?.length ?? 0) > 0 ||
       savedJobRef.current.voiceDNA ||
       savedJobRef.current.contentMap ||
       savedJobRef.current.architecture ||
-      savedJobRef.current.sectionAssignments.length > 0 ||
-      savedJobRef.current.sections.length > 0 ||
-      savedJobRef.current.chapters.length > 0 ||
+      (savedJobRef.current.sectionAssignments?.length ?? 0) > 0 ||
+      (savedJobRef.current.sections?.length ?? 0) > 0 ||
+      (savedJobRef.current.chapters?.length ?? 0) > 0 ||
       savedJobRef.current.frontMatter
     )
   );
@@ -5057,8 +5059,10 @@ export function EbookPipeline({
                 if (!saved.voiceDNA) return "Resume — retry from Voice DNA";
                 if (!saved.contentMap) return "Resume — retry from Content Map";
                 if (!saved.architecture) return "Resume — retry from Chapter Design";
-                if (saved.sectionAssignments.length === 0) return "Resume — retry from Assign Segments";
-                if (saved.sections.length < (saved.sectionAssignments.length || 1)) return `Resume — continue writing (${saved.sections.length} / ${saved.sectionAssignments.length} sections done)`;
+                const assignmentCount = saved.sectionAssignments?.length ?? 0;
+                const sectionCount = saved.sections?.length ?? 0;
+                if (assignmentCount === 0) return "Resume — retry from Assign Segments";
+                if (sectionCount < assignmentCount) return `Resume — continue writing (${sectionCount} / ${assignmentCount} sections done)`;
                 if (!saved.frontMatter) return "Resume — retry from Front Matter";
                 return "Resume pipeline";
               })()}
