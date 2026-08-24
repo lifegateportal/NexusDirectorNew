@@ -4,7 +4,7 @@
  * Each section is saved immediately after completion — pipeline is fully resumable.
  */
 
-import type { EbookJobState } from "@/lib/schemas/ebook";
+import { EbookJobStateSchema, type EbookJobState } from "@/lib/schemas/ebook";
 
 const DB_NAME = "nexus-ebook-jobs";
 const STORE_NAME = "jobs";
@@ -21,6 +21,53 @@ function openDb(): Promise<IDBDatabase> {
   });
 }
 
+async function saveRemoteCheckpoint(state: EbookJobState): Promise<void> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15_000);
+  try {
+    const response = await fetch(`/api/ebook/jobs/${encodeURIComponent(state.jobId)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(state),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      console.warn(`[ebook-job-store] Remote checkpoint failed (${response.status})`);
+    }
+  } catch (err) {
+    console.warn("[ebook-job-store] Remote checkpoint unavailable:", err);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function getLocalEbookJob(jobId: string): Promise<EbookJobState | null> {
+  try {
+    const db = await openDb();
+    return await new Promise((resolve, reject) => {
+      const req = db.transaction(STORE_NAME, "readonly")
+        .objectStore(STORE_NAME)
+        .get(jobId);
+      req.onsuccess = () => resolve((req.result as EbookJobState) ?? null);
+      req.onerror = () => reject(req.error);
+    });
+  } catch {
+    return null;
+  }
+}
+
+async function getRemoteEbookJob(jobId: string): Promise<EbookJobState | null> {
+  try {
+    const response = await fetch(`/api/ebook/jobs/${encodeURIComponent(jobId)}`, { cache: "no-store" });
+    if (!response.ok) return null;
+    const payload = await response.json() as { state?: unknown };
+    const parsed = EbookJobStateSchema.safeParse(payload.state);
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function saveEbookJob(state: EbookJobState, retries = 2): Promise<void> {
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
@@ -34,6 +81,7 @@ export async function saveEbookJob(state: EbookJobState, retries = 2): Promise<v
         };
         tx.onerror = () => reject(tx.error);
       });
+      await saveRemoteCheckpoint(state);
       return;
     } catch (err) {
       const isLastAttempt = attempt === retries;
@@ -45,14 +93,13 @@ export async function saveEbookJob(state: EbookJobState, retries = 2): Promise<v
 }
 
 export async function getEbookJob(jobId: string): Promise<EbookJobState | null> {
-  const db = await openDb();
-  return new Promise((resolve, reject) => {
-    const req = db.transaction(STORE_NAME, "readonly")
-      .objectStore(STORE_NAME)
-      .get(jobId);
-    req.onsuccess = () => resolve((req.result as EbookJobState) ?? null);
-    req.onerror = () => reject(req.error);
-  });
+  const [local, remote] = await Promise.all([
+    getLocalEbookJob(jobId),
+    getRemoteEbookJob(jobId),
+  ]);
+  if (!local) return remote;
+  if (!remote) return local;
+  return Date.parse(remote.updatedAt) > Date.parse(local.updatedAt) ? remote : local;
 }
 
 export async function listEbookJobs(): Promise<EbookJobState[]> {

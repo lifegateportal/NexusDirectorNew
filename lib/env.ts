@@ -2,9 +2,9 @@ import { z } from "zod";
 
 const EnvironmentSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
-  GOOGLE_GENERATIVE_AI_API_KEY: z.string().min(1, "Missing Gemini API key"),
-  DEEPSEEK_API_KEY: z.string().min(1, "Missing DeepSeek API key"),
-  ANTHROPIC_API_KEY: z.string().min(1, "Missing Anthropic API key"),
+  GOOGLE_GENERATIVE_AI_API_KEY: z.string().min(1, "Missing Gemini API key").optional(),
+  DEEPSEEK_API_KEY: z.string().min(1, "Missing DeepSeek API key").optional(),
+  ANTHROPIC_API_KEY: z.string().min(1, "Missing Anthropic API key").optional(),
   DEEPGRAM_API_KEY: z.string().optional(),
   GEMINI_MODEL: z.string().default("gemini-2.0-flash"),
   DEEPSEEK_MODEL: z.string().default("deepseek-v4-pro"),
@@ -23,7 +23,7 @@ const EnvironmentSchema = z.object({
   RUNPOD_API_KEY:             z.string().optional(),
   RUNPOD_VOICE_ENDPOINT_ID:   z.string().optional(), // RunPod Serverless endpoint ID
   RUNPOD_ENDPOINT_ID:         z.string().optional(), // Backward-compatible alias
-  EBOOK_STRICT_ARCHITECT_OVERLAP_GATE: z.enum(["true", "false"]).optional().transform((value) => value !== "false"),
+  EBOOK_STRICT_ARCHITECT_OVERLAP_GATE: z.enum(["true", "false"]).optional().transform((value) => value === "true"),
 });
 
 const parsed = EnvironmentSchema.safeParse(process.env);

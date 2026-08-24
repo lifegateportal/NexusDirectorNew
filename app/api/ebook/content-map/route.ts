@@ -12,6 +12,29 @@ export const maxDuration = 300;
 // hitting DeepSeek's context limit, and prevents the truncation that was causing
 // the last ~37 % of each slot to be invisble to segment extraction.
 const MAX_SLOT_WORDS = 12000;
+const MAX_CONCURRENT_SLOTS = 3;
+const MAX_CONCURRENT_CHUNKS_PER_SLOT = 2;
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  worker: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+
+  async function runWorker() {
+    while (nextIndex < items.length) {
+      const index = nextIndex++;
+      results[index] = await worker(items[index]);
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, () => runWorker()),
+  );
+  return results;
+}
 
 // Per-slot extraction schema — NO rawText (LLM must not copy back large text blobs)
 const SlotSegmentExtractSchema = z.object({
@@ -141,11 +164,13 @@ export async function POST(req: NextRequest) {
       chunk: { sourceAudio: string; text: string };
       slotWords: string[];
       dedupedSegs: z.infer<typeof SlotSegmentExtractSchema>[];
+      error?: string;
     };
 
-    const slotResults: DedupedSlotResult[] = await Promise.all(
-      slotChunks.map(async (chunk): Promise<DedupedSlotResult> => {
-        // A8: Isolate per-slot failures — a single bad LLM call must not abort the whole map
+    const slotResults = await mapWithConcurrency(
+      slotChunks,
+      MAX_CONCURRENT_SLOTS,
+      async (chunk): Promise<DedupedSlotResult> => {
         try {
           const slotWords = chunk.text.split(/\s+/);
           const OVERLAP = 200;
@@ -158,9 +183,10 @@ export async function POST(req: NextRequest) {
             start = end - OVERLAP;
           }
 
-          // Process all chunk ranges within this slot in parallel too.
-          const chunkSegments = await Promise.all(
-            chunkRanges.map(async (range) => {
+          const chunkSegments = await mapWithConcurrency(
+            chunkRanges,
+            MAX_CONCURRENT_CHUNKS_PER_SLOT,
+            async (range) => {
               const chunkText = slotWords.slice(range.start, range.end).join(" ");
               const { object } = await generateObject({
                 model: deepSeekModel,
@@ -171,7 +197,7 @@ export async function POST(req: NextRequest) {
                 prompt: `Extract all teaching segments from this recording (${chunk.sourceAudio}):\n\n${chunkText}`,
               });
               return object.segments;
-            })
+            },
           );
 
           const rawSegmentsForSlot = chunkSegments.flat();
@@ -187,11 +213,19 @@ export async function POST(req: NextRequest) {
 
           return { chunk, slotWords, dedupedSegs };
         } catch (slotErr) {
-          console.error(`[content-map] Slot ${chunk.sourceAudio} failed — returning empty segments:`, slotErr);
-          return { chunk, slotWords: chunk.text.split(/\s+/), dedupedSegs: [] };
+          const message = slotErr instanceof Error ? slotErr.message : "Unknown extraction failure";
+          console.error(`[content-map] Slot ${chunk.sourceAudio} failed:`, slotErr);
+          return { chunk, slotWords: chunk.text.split(/\s+/), dedupedSegs: [], error: message };
         }
-      })
+      },
     );
+
+    const failedSlots = slotResults.filter((result) => result.error);
+    if (failedSlots.length > 0) {
+      throw new Error(
+        `Content extraction failed for ${failedSlots.map((result) => result.chunk.sourceAudio).join(", ")}. No recordings were discarded; retry this stage.`,
+      );
+    }
 
     // ── Assemble segments sequentially so IDs are deterministic ──────────────
     let segmentIdCounter = 1;

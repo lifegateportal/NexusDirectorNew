@@ -107,18 +107,31 @@ function parseSignalFilterLog(logEntries: string[]): { state: SignalFilterState;
 
 async function postJson<T>(url: string, body: unknown, retries = 1): Promise<T> {
   const route = routeLabel(url);
+  const requestTimeoutMs = 290_000;
+  const retryableStatuses = new Set([429, 500, 502, 503, 504]);
   for (let attempt = 0; attempt <= retries; attempt++) {
     let res: Response;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
     try {
       res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
+        signal: controller.signal,
       });
     } catch (err) {
-      const cause = err instanceof Error ? err.message : "Unknown network failure";
+      clearTimeout(timeout);
+      if (attempt < retries) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 1500 * (attempt + 1)));
+        continue;
+      }
+      const cause = err instanceof DOMException && err.name === "AbortError"
+        ? `timed out after ${Math.round(requestTimeoutMs / 1000)} seconds`
+        : err instanceof Error ? err.message : "Unknown network failure";
       throw new Error([`Request failed: ${route}`, `Cause: ${cause}`].join("\n"));
     }
+    clearTimeout(timeout);
     if (!res.ok) {
       const rawText = await res.text();
       let err: { error?: string; details?: string; route?: string } = {};
@@ -128,9 +141,12 @@ async function postJson<T>(url: string, body: unknown, retries = 1): Promise<T> 
         err = rawText ? { details: rawText } : {};
       }
       const msg = err.error || `HTTP ${res.status} error from ${route}`;
-      // Retry once on transient gateway/auth errors (Codespaces proxy warm-up or LLM timeout)
-      if (attempt < retries && (res.status === 401 || res.status === 502 || res.status === 503 || res.status === 504)) {
-        await new Promise<void>((r) => setTimeout(r, 3000));
+      if (attempt < retries && retryableStatuses.has(res.status)) {
+        const retryAfterSeconds = Number(res.headers.get("Retry-After"));
+        const delayMs = Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
+          ? retryAfterSeconds * 1000
+          : 1500 * (attempt + 1);
+        await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
         continue;
       }
       // Surface a helpful message for persistent 401s
@@ -245,6 +261,7 @@ function sanitizeJobStateForPersistence(input: EbookJobState): EbookJobState {
     jobId: String(normalized.jobId),
     status: "idle",
     audioFileNames: [],
+    sourceSlots: [],
     transcripts: [],
     masterTranscript: "",
     filteredTranscript: "",
@@ -2405,17 +2422,21 @@ export function EbookPipeline({
     };
 
     const fromLocal = tryLocalStorage();
-    if (fromLocal) { restore(fromLocal); return; }
+    if (fromLocal) restore(fromLocal);
 
-    // IndexedDB fallback
-    const savedId = localStorage.getItem(JOB_STORAGE_KEY);
+    // IndexedDB/R2 may contain a newer checkpoint than the synchronous cache.
+    const savedId = localStorage.getItem(JOB_STORAGE_KEY) ?? fromLocal?.jobId;
     if (!savedId) return;
     void getEbookJob(savedId).then((job) => {
       if (!job) return;
       // Populate savedJobRef immediately so resume button shows even if normalization fails
       savedJobRef.current = job;
       try {
-        restore(normalizeJob(job));
+        const normalized = normalizeJob(job);
+        if (!fromLocal || Date.parse(normalized.updatedAt) > Date.parse(fromLocal.updatedAt)) {
+          localStorage.setItem(JOB_STATE_KEY, JSON.stringify(normalized));
+          restore(normalized);
+        }
       } catch (err) {
         console.warn("[EbookPipeline] Failed to normalize saved job from IndexedDB:", err);
         // Still populate savedJobRef so resume button shows
@@ -2978,6 +2999,7 @@ export function EbookPipeline({
           chapters: resume.chapters ?? [],
           sections: resume.sections ?? [],
           sectionAssignments: resume.sectionAssignments ?? [],
+          sourceSlots: resume.sourceSlots ?? [],
           transcripts: resume.transcripts ?? [],
           errorLog: resume.errorLog ?? [],
         }
@@ -2985,8 +3007,20 @@ export function EbookPipeline({
           jobId,
           status: "transcribing",
           audioFileNames: audioFiles.filter(Boolean).map((f) => f!.name),
+          sourceSlots: audioFiles.flatMap((audioFile, index) => {
+            const transcriptFile = transcriptFiles[index];
+            const selectedFile = transcriptFile ?? audioFile;
+            return selectedFile ? [{
+              slot: index + 1,
+              label: `Slot-${index + 1}`,
+              fileName: selectedFile.name,
+              sourceType: transcriptFile ? "transcript" as const : "audio" as const,
+            }] : [];
+          }),
           transcripts: [],
           masterTranscript: "",
+          filteredTranscript: "",
+          filterRemovedCount: 0,
           voiceDNA: null,
           contentMap: null,
           architecture: null,
@@ -2994,6 +3028,7 @@ export function EbookPipeline({
           sections: [],
           chapters: [],
           frontMatter: null,
+          backMatter: null,
           exportUrls: null,
           currentStage: "transcribing",
           progress: { total: 0, completed: 0 },
@@ -3032,13 +3067,52 @@ export function EbookPipeline({
         type FilterResult = { cleanedTranscript: string; removedSegments: { reason: string; excerpt: string }[]; summary: string };
         const transcriptResults: { label: string; text: string }[] = [];
 
+        const selectedSlotIndexes = audioFiles.flatMap((audioFile, index) =>
+          audioFile || transcriptFiles[index] ? [index] : []
+        );
+        const savedSlotIndexes = (acc.transcripts ?? []).flatMap((transcript) => {
+          const match = transcript.label.match(/^Slot-(\d+)$/);
+          return match ? [Number(match[1]) - 1] : [];
+        });
+        const configuredSlotIndexes = (acc.sourceSlots ?? []).map((source) => source.slot - 1);
+        const slotsToProcess = [...new Set([
+          ...configuredSlotIndexes,
+          ...selectedSlotIndexes,
+          ...savedSlotIndexes,
+        ])].filter((index) => index >= 0 && index < 10).sort((a, b) => a - b);
+
+        if (
+          resume &&
+          configuredSlotIndexes.length === 0 &&
+          acc.audioFileNames.length > new Set([...selectedSlotIndexes, ...savedSlotIndexes]).size
+        ) {
+          throw new Error("This older checkpoint is missing one or more audio files. Re-select the unfinished audio slots, then resume.");
+        }
+        if (slotsToProcess.length === 0) {
+          throw new Error("No resumable audio or transcript data was found. Re-select the source files and resume.");
+        }
+
         // Reset all statuses to idle before starting
         setAudioSourceStatuses(["idle", "idle", "idle", "idle", "idle", "idle", "idle", "idle", "idle", "idle"]);
 
         setStage("filtering");
-        for (let i = 0; i < 10; i++) {
-          if (!audioFiles[i] && !transcriptFiles[i]) continue;
+        for (const i of slotsToProcess) {
           const label = `Slot-${i + 1}`;
+          const savedTranscript = acc.transcripts.find((transcript) => transcript.label === label);
+          if (savedTranscript?.text.trim()) {
+            transcriptResults.push(savedTranscript);
+            setAudioSourceStatuses((prev) => {
+              const next = [...prev];
+              next[i] = "complete";
+              return next;
+            });
+            addLog(`↩ ${label} transcript restored — ${countWords(savedTranscript.text).toLocaleString()} words`);
+            continue;
+          }
+
+          if (!audioFiles[i] && !transcriptFiles[i]) {
+            throw new Error(`${label} still needs its source file. Re-select "${acc.sourceSlots.find((source) => source.slot === i + 1)?.fileName ?? label}" and resume.`);
+          }
           
           // Mark as transcribing
           setAudioSourceStatuses((prev) => {
@@ -3047,7 +3121,17 @@ export function EbookPipeline({
             return next;
           });
 
-          const rawText = await resolveSlot(audioFiles[i], transcriptFiles[i], label);
+          let rawText: string;
+          try {
+            rawText = await resolveSlot(audioFiles[i], transcriptFiles[i], label);
+          } catch (slotError) {
+            setAudioSourceStatuses((prev) => {
+              const next = [...prev];
+              next[i] = "error";
+              return next;
+            });
+            throw slotError;
+          }
 
           // Mark as complete
           setAudioSourceStatuses((prev) => {
@@ -3076,6 +3160,8 @@ export function EbookPipeline({
           }
 
           transcriptResults.push({ label, text: slotText });
+          acc.transcripts = [...transcriptResults];
+          await checkpoint("transcribing");
         }
         masterTranscript = transcriptResults
           .map((t) => `[${t.label}]\n${t.text}`)
@@ -3527,9 +3613,8 @@ export function EbookPipeline({
                 }
                 addLog(`  ✓ Chapter ${assignment.chapterNumber} plan ready (${chapterPlanMap.size} sections planned)`);
               } catch (planErr) {
-                addLog(`  ✗ Chapter plan failed — drafting stopped before unowned prose could be written`);
+                addLog(`  ⚠ Chapter plan failed — falling back to per-section source planning`);
                 console.warn("[chapter-plan] failed:", planErr);
-                throw planErr;
               }
             }
           }
@@ -3804,10 +3889,7 @@ export function EbookPipeline({
             (conflict) => conflict.prior.chapterNumber !== assignment.chapterNumber
           );
           if (claimConflicts.length > 0) {
-            const conflict = claimConflicts[0];
-            throw new Error(
-              `Duplicate idea gate blocked Ch ${assignment.chapterNumber} §${assignment.sectionNumber}: ${conflict.incoming}`
-            );
+            addLog(`  ⚠ ${claimConflicts.length} duplicate claim(s) remain after rewrite — flagged for final review`);
           }
         }
 
@@ -3964,16 +4046,9 @@ export function EbookPipeline({
                 });
               const remainingConflicts = await findSemanticClaimConflicts(rewrittenChapterClaims, priorChapterClaims);
               if (remainingConflicts.length > 0) {
-                const retrySectionNumbers = new Set(conflictsBySection.keys());
-                allSections = allSections.filter(
-                  (section) => section.chapterNumber !== assignment.chapterNumber || !retrySectionNumbers.has(section.sectionNumber)
-                );
-                completedCount -= retrySectionNumbers.size;
-                acc.sections = [...allSections];
-                acc.progress = { total: totalSections, completed: completedCount };
-                throw new Error(
-                  `Duplicate idea gate blocked Chapter ${assignment.chapterNumber} after one targeted rewrite`
-                );
+                  addLog(`  ⚠ Chapter ${assignment.chapterNumber} retains ${remainingConflicts.length} semantic duplicate(s) after rewrite — flagged for final review`);
+                } else {
+                  addLog(`  ✓ Chapter ${assignment.chapterNumber} semantic ownership verified`);
               }
 
               currentChapterProse = allSections
@@ -3986,7 +4061,6 @@ export function EbookPipeline({
               for (const section of allSections) {
                 for (const label of extractIllustrationLabels(section.body ?? "")) usedIllustrations.add(label);
               }
-              addLog(`  ✓ Chapter ${assignment.chapterNumber} semantic ownership verified`);
             }
           }
         }
@@ -4165,7 +4239,7 @@ export function EbookPipeline({
       setQualityReport(quality);
       const duplicateErrors = quality.issues.filter((issue) => issue.code === "DUPLICATE_IDEA" && issue.severity === "error");
       if (duplicateErrors.length > 0) {
-        throw new Error(`Duplicate idea gate blocked completion: ${duplicateErrors.length} unresolved duplicate claim(s).`);
+        addLog(`⚠ Quality review found ${duplicateErrors.length} unresolved duplicate claim(s) — draft remains available for review.`);
       }
       if (quality.pass) {
         addLog(`✓ Quality score: ${quality.score}/100`);

@@ -339,24 +339,28 @@ function EbookPageClient() {
   }, []);
 
   const readResumableJobState = useCallback(async (): Promise<EbookJobState | null> => {
+    let localJob: EbookJobState | null = null;
     try {
       const raw = localStorage.getItem(JOB_STATE_KEY);
       if (raw) {
         const parsed = normalizeJobStateForSave(JSON.parse(raw) as unknown);
-        if (hasResumableProgress(parsed)) return parsed;
+        if (hasResumableProgress(parsed)) localJob = parsed;
       }
     } catch {
-      // Fall through to IndexedDB lookup.
+      // Fall through to durable checkpoint lookup.
     }
 
     try {
-      const savedJobId = localStorage.getItem(JOB_STORAGE_KEY);
+      const savedJobId = localStorage.getItem(JOB_STORAGE_KEY) ?? localJob?.jobId;
       if (savedJobId) {
         const fromStore = await getEbookJob(savedJobId).catch(() => null);
-        const parsed = normalizeJobStateForSave(fromStore);
-        if (hasResumableProgress(parsed)) {
-          localStorage.setItem(JOB_STATE_KEY, JSON.stringify(parsed));
-          return parsed;
+        const storedJob = normalizeJobStateForSave(fromStore);
+        const newest = [localJob, storedJob]
+          .filter((job): job is EbookJobState => hasResumableProgress(job))
+          .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))[0] ?? null;
+        if (newest) {
+          localStorage.setItem(JOB_STATE_KEY, JSON.stringify(newest));
+          return newest;
         }
       }
 
@@ -372,7 +376,7 @@ function EbookPageClient() {
       localStorage.setItem(JOB_STATE_KEY, JSON.stringify(newestResumable));
       return newestResumable;
     } catch {
-      return null;
+      return localJob;
     }
   }, [normalizeJobStateForSave]);
 
@@ -793,9 +797,10 @@ function EbookPageClient() {
     // Prefer that live state because an error may occur before an async
     // IndexedDB write completes or mobile Safari flushes storage.
     const liveJob = liveJobStateRef.current;
-    const job = hasResumableProgress(liveJob)
-      ? liveJob
-      : await readResumableJobState();
+    const persistedJob = await readResumableJobState();
+    const job = [liveJob, persistedJob]
+      .filter((candidate): candidate is EbookJobState => hasResumableProgress(candidate))
+      .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))[0] ?? null;
     if (!job) {
       setStatusMsg({ type: "error", text: "No resumable pipeline checkpoint found." });
       setHasContinueState(false);

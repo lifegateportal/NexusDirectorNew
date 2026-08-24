@@ -443,6 +443,12 @@ export const EbookJobStateSchema = z.object({
     "frontmatter", "exporting", "complete", "failed",
   ]).default("idle"),
   audioFileNames: z.array(z.string()).default([]),
+  sourceSlots: z.array(z.object({
+    slot: z.number().int().min(1).max(10),
+    label: z.string(),
+    fileName: z.string(),
+    sourceType: z.enum(["audio", "transcript"]),
+  })).default([]),
   transcripts: z.array(
     z.object({ label: z.string(), text: z.string() })
   ).default([]),
