@@ -108,7 +108,7 @@ These 3-gram constructions are already overused across prior chapters. Avoid the
     const excerpts = (sec.transcriptExcerpts ?? [])
       .map((e) => cleanTranscriptForBook(e).trim())
       .filter(Boolean)
-      .map((e, i) => `[${i + 1}] ${e.slice(0, 1600)}`)
+      .map((e, i) => `[${i + 1}] ${e}`)
       .join("\n\n");
     const planBlock = (sec.assignedPlan ?? []).length > 0
       ? `\nPARAGRAPH PLAN (follow this sequence):\n${sec.assignedPlan!.map((p, i) =>
@@ -121,7 +121,7 @@ These 3-gram constructions are already overused across prior chapters. Avoid the
     // G5: Include assigned quotes so the LLM knows which scriptures belong in this section
     const quotesText = (sec.quotes ?? []).length > 0
       ? `\nASSIGNED QUOTES FOR THIS SECTION:\n${sec.quotes.map((q) =>
-          `  • ${q.reference}${q.translation ? ` (${q.translation})` : ""}: "${q.text.slice(0, 200)}${q.text.length > 200 ? "…" : ""}"`
+          `  • ${q.reference}${q.translation ? ` (${q.translation})` : ""}: "${q.text}"`
         ).join("\n")}`
       : "";
     const lastFlag = sec.isLastSectionInChapter ? " [LAST SECTION — hard chapter boundary: do NOT develop the next chapter's themes]" : "";
@@ -140,6 +140,13 @@ You are writing ALL ${sections.length} sections of Chapter ${chapterNumber} in a
 # SYNTHESIS, NOT TRANSCRIPTION
 Extract core insights from the transcript. Reassemble as premium book prose — NOT paraphrased sentences. Every claim must trace to the provided excerpts. Zero fabrication.
 
+# CONTENT COVERAGE — CRITICAL
+• EXHAUST every distinct key point, story, illustration, and argument from each section's excerpts
+• Meet or exceed the target word count for each section (±15% acceptable)
+• Each section must develop ALL its assigned key points fully — not just mention them
+• Write shorter ONLY to avoid bleeding into the next section/chapter — never to save tokens
+• If you finish a section well under target word count, you missed content from the excerpts
+
 # VOICE AND STYLE
 • Active voice, strong verbs, authoritative tone
 • NO em dashes (—). Use comma, colon, semicolon, or subordinate clause instead
@@ -155,13 +162,16 @@ Each paragraph is a string in a JSON array. Give each paragraph one teaching adv
 Each section is sealed. Do NOT preview the next section's content from within the current one. Presuppose what you just wrote — opening sentences of Section 2+ must not re-introduce concepts already developed.
 
 # SCRIPTURE RULES
+• Reproduce only the complete verified Scripture text supplied in ASSIGNED QUOTES. Never reconstruct, complete, correct, or paraphrase verse text from memory
 • Short (<40 words): *"verse text"* (Book Chapter:Verse, Translation) inline
-• Long (40+ words): markdown blockquote, no quotation marks, — Reference (Translation) at end
+• Long (40+ words): markdown blockquote with no quotation marks; place *Book Chapter:Verse, Translation* on its own final blockquote line with no dash
+• Use a comma before the translation abbreviation in every citation: (Psalm 27:1, NIV), not (Psalm 27:1 NIV)
+• Use an en dash in verse ranges: Titus 2:11–14
 • Develop only the truth or application the speaker explicitly draws from the text; never force an application circuit
 • No post-quote restatement (next sentence must ADVANCE the argument, not re-explain the quote)
 • Anchor controlling verse BEFORE exposition, not after
 • Preserve Greek/Hebrew terms exactly as the speaker stated them
-• If a translation was not stated, write (translation unspecified)
+• If verified text is unavailable, cite the reference only; never supply verse wording from memory
 
 # REMOVE FROM OUTPUT — HARD RULE: if any of these appear in output, the book fails QC
 • Live-event audience address: "say amen", "somebody say", "turn to your neighbor", "give your neighbor a high five", "can I get an amen", "clap your hands", "stand to your feet", "you may be seated"
@@ -207,8 +217,8 @@ ${sectionPayload}`;
           model: deepSeekModel,
           schema: WriteChapterOutputSchema,
           mode: "json",
-          maxTokens: 16_000, // G2: explicit ceiling for full-chapter output
-          temperature: 0.55, // G1: lower temp for cross-section coherence
+          maxTokens: 24_000, // Sufficient for 3-5 sections at 800-1200 words each
+          temperature: 0.7, // Match write-section's expansive temperature
           system,
           prompt,
         });

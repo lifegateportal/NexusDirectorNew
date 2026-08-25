@@ -597,6 +597,7 @@ export type VoiceDNA = z.infer<typeof VoiceDNASchema>;
 export type PrintSpec = z.infer<typeof PrintSpecSchema>;
 export type ContentSegment = z.infer<typeof ContentSegmentSchema>;
 export type ContentMap = z.infer<typeof ContentMapSchema>;
+
 export type SectionBlueprint = z.infer<typeof SectionBlueprintSchema>;
 export type ChapterBlueprint = z.infer<typeof ChapterBlueprintSchema>;
 export type BookArchitecture = z.infer<typeof BookArchitectureSchema>;
