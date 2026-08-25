@@ -75,6 +75,7 @@ export const ContentMapSchema = z.object({
 
 export const UnifiedContentSegmentSchema = z.object({
   id: z.string(),
+  sourceAudio: z.enum(["audio-1", "audio-2", "audio-3", "audio-4", "audio-5", "audio-6", "audio-7", "audio-8", "audio-9", "audio-10"]).default("audio-1"),
   topic: z.string(),
   // Verbatim excerpt from the transcript for this segment.
   // Required so downstream planning/writing remains source-backed.

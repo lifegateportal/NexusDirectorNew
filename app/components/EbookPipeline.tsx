@@ -202,7 +202,7 @@ function adaptUnifiedContentMap(unified: UnifiedContentMap): ContentMap {
   // Convert unified segments to legacy format with sourceAudio field
   const segments = unified.segments.map((seg, idx) => ({
     id: seg.id,
-    sourceAudio: "audio-1" as const, // Default to audio-1 since unified doesn't track this
+    sourceAudio: seg.sourceAudio,
     topic: seg.topic,
     rawText: seg.rawText,
     keyPoints: seg.keyPoints,

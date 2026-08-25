@@ -77,6 +77,10 @@ SEGMENT EXTRACTION RULES
 - Aim for 8-15 segments per recording (fewer for shorter messages, more for long teachings)
 - Skip non-teaching content: prayers, announcements, "turn to your neighbor", altar calls
 - Each segment MUST include rawText: a verbatim excerpt copied from the transcript for that segment (roughly 120-320 words)
+- Each segment MUST include sourceAudio mapped to the slot marker where that excerpt appears:
+  [Slot-1] -> audio-1, [Slot-2] -> audio-2, ... [Slot-10] -> audio-10
+- Do NOT merge content from different slot markers into a single segment.
+- one segment belongs to exactly one sourceAudio value.
 
 TOPIC NAMING:
 - Name segments by their teaching claim, never use structural labels
