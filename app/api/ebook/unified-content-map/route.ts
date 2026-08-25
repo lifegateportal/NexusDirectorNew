@@ -7,6 +7,41 @@ import { SOURCE_LOCK_RULES } from "@/lib/editorial-style-bible";
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
+function jsonKeepAlive<T>(work: () => Promise<T>): Response {
+  const encoder = new TextEncoder();
+
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      // Keep upstream proxies from considering this request idle
+      // while the model is still generating.
+      const keepAlive = setInterval(() => {
+        try {
+          controller.enqueue(encoder.encode(" "));
+        } catch {
+          // Stream may already be closed.
+        }
+      }, 12000);
+
+      try {
+        const payload = await work();
+        controller.enqueue(encoder.encode(JSON.stringify(payload)));
+      } finally {
+        clearInterval(keepAlive);
+        try { controller.close(); } catch { /* already closed */ }
+      }
+    },
+  });
+
+  return new Response(stream, {
+    status: 200,
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "no-store, no-transform",
+      "X-Accel-Buffering": "no",
+    },
+  });
+}
+
 const UNIFIED_CONTENT_ANALYST_SYSTEM = `You are an expert content analyst extracting teaching structure from sermon transcripts.
 
 ═══════════════════════════════════════════════════════════════════
@@ -127,44 +162,46 @@ ${filteredTranscript}
 Analyze this complete teaching transcript and extract the unified content map.
 Focus on teaching segments, narrative arc, story inventory, and scripture positions.`;
 
-    const contentMap = await generateObject({
-      model: deepSeekModel,
-      schema: UnifiedContentMapSchema,
-      mode: "json",
-      system: UNIFIED_CONTENT_ANALYST_SYSTEM,
-      prompt,
-      temperature: 0.3, // Lower temperature for more consistent extraction
+    return jsonKeepAlive(async () => {
+      const contentMap = await generateObject({
+        model: deepSeekModel,
+        schema: UnifiedContentMapSchema,
+        mode: "json",
+        system: UNIFIED_CONTENT_ANALYST_SYSTEM,
+        prompt,
+        temperature: 0.3, // Lower temperature for more consistent extraction
+      });
+
+      // Assign sequential IDs to segments if not already set
+      const normalizedSegments = contentMap.object.segments.map((seg, idx) => ({
+        ...seg,
+        id: seg.id || `seg-${idx + 1}`,
+      }));
+
+      // Calculate total words if not provided
+      const totalWords = contentMap.object.totalEstimatedWords ||
+        normalizedSegments.reduce((sum, seg) => sum + seg.estimatedWordCount, 0);
+
+      const result: UnifiedContentMap = {
+        ...contentMap.object,
+        segments: normalizedSegments,
+        totalEstimatedWords: totalWords,
+      };
+
+      console.log(
+        `[unified-content-map] Extracted ${result.segments.length} segments, ` +
+        `${result.storyInventory.length} stories, ` +
+        `${totalWords} estimated words, ` +
+        `thesis: "${result.coreThesis.slice(0, 80)}..."`
+      );
+
+      return result;
     });
-
-    // Assign sequential IDs to segments if not already set
-    const normalizedSegments = contentMap.object.segments.map((seg, idx) => ({
-      ...seg,
-      id: seg.id || `seg-${idx + 1}`,
-    }));
-
-    // Calculate total words if not provided
-    const totalWords = contentMap.object.totalEstimatedWords || 
-      normalizedSegments.reduce((sum, seg) => sum + seg.estimatedWordCount, 0);
-
-    const result: UnifiedContentMap = {
-      ...contentMap.object,
-      segments: normalizedSegments,
-      totalEstimatedWords: totalWords,
-    };
-
-    console.log(
-      `[unified-content-map] Extracted ${result.segments.length} segments, ` +
-      `${result.storyInventory.length} stories, ` +
-      `${totalWords} estimated words, ` +
-      `thesis: "${result.coreThesis.slice(0, 80)}..."`
-    );
-
-    return NextResponse.json(result);
   } catch (error) {
     console.error("[unified-content-map] Error:", error);
-    
+
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
-    
+
     return NextResponse.json(
       {
         error: "Failed to generate unified content map",
