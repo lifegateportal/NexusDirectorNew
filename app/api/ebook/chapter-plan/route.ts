@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateObject } from "ai";
 import { z } from "zod";
-import { deepSeekReasonerModel } from "@/lib/ai-providers";
+import { deepSeekModel } from "@/lib/ai-providers";
 import { ChapterPlanRequestSchema, ChapterPlanResponseSchema } from "@/lib/schemas/ebook";
 import { SOURCE_LOCK_RULES, READER_NORMALIZATION_RULES } from "@/lib/editorial-style-bible";
 
@@ -195,10 +195,12 @@ ${excerptPayload}`;
   // We send a space every 15s; JSON.parse (used by res.json()) ignores leading whitespace.
   const encoder = new TextEncoder();
   const generatePromise = generateObject({
-    model: deepSeekReasonerModel,
+    // Chapter plan uses structured output and must run on a model that supports
+    // generateObject JSON mode reliably.
+    model: deepSeekModel,
     schema: ChapterPlanLLMSchema,
     mode: "json",
-    temperature: 1, // reasoner requires temperature=1
+    temperature: 0.3,
     system,
     prompt,
   });
@@ -311,10 +313,11 @@ ${excerptPayload}`;
       } catch (err) {
         clearInterval(heartbeat);
         console.error("[chapter-plan] Error:", err);
-        const fallback: z.infer<typeof ChapterPlanResponseSchema> = {
-          sectionPlans: sections.map((s) => ({ sectionNumber: s.sectionNumber, paragraphPlan: [] })),
-        };
-        controller.enqueue(encoder.encode(JSON.stringify(fallback)));
+        const errorMessage = err instanceof Error ? err.message : "Chapter plan generation failed";
+        controller.enqueue(encoder.encode(JSON.stringify({
+          error: "Failed to generate chapter plan",
+          details: errorMessage,
+        })));
       } finally {
         try { controller.close(); } catch { /* already closed */ }
       }

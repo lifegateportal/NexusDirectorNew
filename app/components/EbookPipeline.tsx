@@ -3493,7 +3493,11 @@ export function EbookPipeline({
             if (incompleteCount > 0) {
               addLog(`  📋 Planning Chapter ${assignment.chapterNumber} (${incompleteCount} sections remaining)…`);
               try {
-                const chapterPlanResult = await postJson<{ sectionPlans: Array<{ sectionNumber: number; paragraphPlan: Array<{ purpose: string; supportedExcerptNumbers: number[]; minExcerptNumber?: number }> }> }>(
+                const chapterPlanResult = await postJson<{
+                  sectionPlans?: Array<{ sectionNumber: number; paragraphPlan: Array<{ purpose: string; supportedExcerptNumbers: number[]; minExcerptNumber?: number }> }>;
+                  error?: string;
+                  details?: string;
+                }>(
                   "/api/ebook/chapter-plan",
                   {
                     chapterNumber: assignment.chapterNumber,
@@ -3555,6 +3559,12 @@ export function EbookPipeline({
                     })),
                   }
                 );
+                if (chapterPlanResult.error) {
+                  throw new Error(chapterPlanResult.details ? `${chapterPlanResult.error}: ${chapterPlanResult.details}` : chapterPlanResult.error);
+                }
+                if (!chapterPlanResult.sectionPlans || chapterPlanResult.sectionPlans.length === 0) {
+                  throw new Error(`Chapter ${assignment.chapterNumber} planning returned no section plans`);
+                }
                 for (const sp of chapterPlanResult.sectionPlans ?? []) {
                   if ((sp.paragraphPlan ?? []).length > 0) {
                     chapterPlanMap.set(sp.sectionNumber, sp.paragraphPlan);
