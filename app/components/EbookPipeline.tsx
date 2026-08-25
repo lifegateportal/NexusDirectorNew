@@ -4175,7 +4175,12 @@ export function EbookPipeline({
       savedJobRef.current.sectionAssignments.length > 0 ||
       savedJobRef.current.sections.length > 0 ||
       savedJobRef.current.chapters.length > 0 ||
-      savedJobRef.current.frontMatter
+      savedJobRef.current.frontMatter ||
+      (savedJobRef.current.progress?.completed ?? 0) > 0 ||
+      savedJobRef.current.status === "failed" ||
+      savedJobRef.current.status === "writing" ||
+      savedJobRef.current.status === "polishing" ||
+      savedJobRef.current.status === "frontmatter"
     )
   );
 
@@ -4912,17 +4917,17 @@ export function EbookPipeline({
                 setError(null);
                 setSignalFilterState(parseSignalFilterLog(saved.errorLog ?? []).state);
                 setSignalFilterDetail(parseSignalFilterLog(saved.errorLog ?? []).detail);
-                // Determine which stage to label the resume from
-                const resumeStage = saved.contentMap
-                  ? saved.architecture ? "writing" : "architecting"
-                  : saved.voiceDNA ? "content mapping" : "voice DNA";
-                addLog(`↩ Resuming from ${resumeStage}…`);
+                const resumeStage = saved.currentStage || saved.status || "last checkpoint";
+                addLog(`↩ Resuming from ${resumeStage} checkpoint…`);
                 void runPipeline(saved);
               }}
               className="w-full min-h-[48px] rounded-xl bg-gradient-to-r from-amber-500/80 to-orange-500/80 text-white font-semibold text-sm active:scale-[0.98] transition-all"
             >
               {(() => {
                 const saved = savedJobRef.current!;
+                if ((saved.progress?.completed ?? 0) > 0 && (saved.sectionAssignments?.length ?? 0) > 0) {
+                  return `Resume — continue writing (${saved.progress.completed} / ${saved.sectionAssignments.length} sections done)`;
+                }
                 if (!saved.voiceDNA) return "Resume — retry from Voice DNA";
                 if (!saved.contentMap) return "Resume — retry from Content Map";
                 if (!saved.architecture) return "Resume — retry from Chapter Design";

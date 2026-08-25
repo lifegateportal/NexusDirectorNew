@@ -662,6 +662,9 @@ This content is a sermon series. The author's preaching sequence IS the book's s
         .flatMap((sid) => segmentMap[sid]?.quotes ?? [])
         .map((q) => quoteMap[q.id] ?? q)
         .filter((q, i, arr) => arr.findIndex((x) => x.id === q.id) === i);
+      const chapterSourceWords = chapterSegIds
+        .map((sid) => segmentMap[sid]?.estimatedWordCount ?? 0)
+        .reduce((sum, n) => sum + n, 0);
 
       const rawSections = ch.sections.map((sec, secIdx) => {
         const safeSourceSegmentIds = sec.sourceSegmentIds.filter((id) => validSegmentIds.has(id));
@@ -724,6 +727,20 @@ This content is a sermon series. The author's preaching sequence IS the book's s
 
       // Strip internal fields before returning
       const cleanSections = sections.map(({ _contentDensity: _d, _originalIdx: _o, ...rest }) => rest);
+
+      // In oneChapterPerUpload mode, preserve per-slot chapter depth by enforcing
+      // a minimum chapter budget relative to source segment words.
+      // This prevents multi-slot runs from shrinking each chapter excessively.
+      if (input.oneChapterPerUpload && cleanSections.length > 0 && chapterSourceWords > 0) {
+        const currentBudget = cleanSections.reduce((sum, s) => sum + (s.targetWordCount ?? 0), 0);
+        const minimumBudget = Math.max(2200, Math.round(chapterSourceWords * 0.78));
+        if (currentBudget < minimumBudget) {
+          const scale = minimumBudget / Math.max(currentBudget, 1);
+          for (const s of cleanSections) {
+            s.targetWordCount = Math.max(300, Math.round((s.targetWordCount ?? 0) * scale));
+          }
+        }
+      }
 
       return {
         number: ch.number,
