@@ -3590,7 +3590,7 @@ export function EbookPipeline({
           // ── Proposal 2: single-call chapter writer ──────────────────────
           // When useChapterWriter is on, write ALL sections of this chapter
           // in one LLM call. Results cached — per-section loop reads from cache.
-          // Falls back to per-section writes if the call fails.
+          // Strict mode: no per-section fallback when chapter writer is enabled.
           if (useChapterWriter && chapterWrittenForChapter !== assignment.chapterNumber) {
             chapterWrittenForChapter = assignment.chapterNumber;
             chapterWriteCache.clear();
@@ -3667,10 +3667,19 @@ export function EbookPipeline({
                     claimLedger: sec.claimLedger ?? [],
                   });
                 }
+                const missingSectionNumbers = chapterAssignmentsForWrite
+                  .map((a) => a.sectionNumber)
+                  .filter((sectionNumber) => !chapterWriteCache.has(`${assignment.chapterNumber}-${sectionNumber}`));
+                if (missingSectionNumbers.length > 0) {
+                  throw new Error(
+                    `write-chapter returned partial output for Ch ${assignment.chapterNumber}; missing section(s): ${missingSectionNumbers.join(", ")}`
+                  );
+                }
                 addLog(`  ✓ Chapter ${assignment.chapterNumber} written (${chapterWriteCache.size} sections cached)`);
               } catch (writeErr) {
-                addLog(`  ⚠ Chapter write call failed — falling back to per-section writes`);
+                addLog(`  ✗ Chapter write call failed — single-pass mode requires complete chapter output`);
                 console.warn("[write-chapter] failed:", writeErr);
+                throw writeErr;
               }
             }
           }
@@ -3786,6 +3795,11 @@ export function EbookPipeline({
         let passiveVoiceCount: number;
         let unfullfilledHook: string | null;
         let sequenceBreakCount: number;
+        const isStrictBatchSection = useChapterWriter && Boolean(_cached && _cached.paragraphs.length > 0);
+        if (useChapterWriter && !isStrictBatchSection) {
+          throw new Error(`Single-pass chapter writer missing cached output for Ch ${assignment.chapterNumber} §${assignment.sectionNumber}`);
+        }
+
         if (_cached && _cached.paragraphs.length > 0) {
           body = _cached.paragraphs.join("\n\n");
           claimLedger = _cached.claimLedger;
@@ -3801,7 +3815,7 @@ export function EbookPipeline({
 
         // Quality gate: retry once if too short (transcript coverage check)
         const wc = countWords(body);
-        if (wc < 300 && assignment.transcriptExcerpts.join(" ").length > 500) {
+        if (!isStrictBatchSection && wc < 300 && assignment.transcriptExcerpts.join(" ").length > 500) {
           addLog(`  ↺ Section too short (${wc} words) — retrying with expansion prompt…`);
           const expanded = { ...augmented, targetWordCount: Math.max(assignment.targetWordCount, 600) };
           ({ body, claimLedger, passiveVoiceCount, unfullfilledHook, sequenceBreakCount } = await streamSection(
@@ -3838,7 +3852,7 @@ export function EbookPipeline({
         });
         let claimConflicts = findClaimConflicts(effectiveClaimLedger, priorClaimLedger);
         let semanticClaimConflicts = await findSemanticClaimConflicts(effectiveClaimLedger, priorClaimLedger);
-        if (claimConflicts.length > 0 || semanticClaimConflicts.length > 0) {
+        if (!isStrictBatchSection && (claimConflicts.length > 0 || semanticClaimConflicts.length > 0)) {
           const totalConflicts = claimConflicts.length + semanticClaimConflicts.length;
           addLog(`  ↺ ${totalConflicts} duplicate claim(s) detected — rewriting section once`);
           const collisionExclusions = [...claimConflicts, ...semanticClaimConflicts].map((conflict) =>
