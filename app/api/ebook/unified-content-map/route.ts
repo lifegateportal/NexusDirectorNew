@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateObject } from "ai";
-import { deepSeekFlashModel } from "@/lib/ai-providers";
+import { deepSeekModel } from "@/lib/ai-providers";
 import { UnifiedContentMapSchema, type UnifiedContentMap } from "@/lib/schemas/ebook";
 import { SOURCE_LOCK_RULES } from "@/lib/editorial-style-bible";
 
@@ -108,6 +108,10 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Verify model configuration at runtime. Provider-level guard forces v4-pro
+    // if DEEPSEEK_MODEL is accidentally set to deepseek-reasoner.
+    console.log(`[unified-content-map] Using model: ${deepSeekModel.modelId || "unknown"}`);
+
     // Build prompt with voice DNA context if available
     const voiceContext = voiceDNA
       ? `\n\nVOICE DNA (for reference):\nTone: ${voiceDNA.toneProfile}\nSignature phrases: ${voiceDNA.signaturePhrases?.slice(0, 10).join(", ") || "N/A"}\n`
@@ -124,8 +128,9 @@ Analyze this complete teaching transcript and extract the unified content map.
 Focus on teaching segments, narrative arc, story inventory, and scripture positions.`;
 
     const contentMap = await generateObject({
-      model: deepSeekFlashModel,
+      model: deepSeekModel,
       schema: UnifiedContentMapSchema,
+      mode: "json",
       system: UNIFIED_CONTENT_ANALYST_SYSTEM,
       prompt,
       temperature: 0.3, // Lower temperature for more consistent extraction

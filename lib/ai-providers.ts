@@ -24,7 +24,13 @@ const anthropicCurator = createAnthropic({
 });
 
 export const geminiModel = google(env.GEMINI_MODEL);
-export const deepSeekModel = deepSeek(env.DEEPSEEK_MODEL);
+// Structured-output routes (generateObject) must not run on deepseek-reasoner,
+// which rejects tool_choice / structured output flows. Guard at provider level
+// so a misconfigured DEEPSEEK_MODEL cannot break production pipelines.
+const safeDeepSeekModelId = env.DEEPSEEK_MODEL === "deepseek-reasoner"
+  ? "deepseek-v4-pro"
+  : env.DEEPSEEK_MODEL;
+export const deepSeekModel = deepSeek(safeDeepSeekModelId);
 export const deepSeekFlashModel = deepSeek("deepseek-v4-flash");
 export const deepSeekReasonerModel = deepSeek("deepseek-reasoner");
 export const claudeModel = anthropic(env.CLAUDE_MODEL);
