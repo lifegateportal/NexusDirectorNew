@@ -109,6 +109,7 @@ export function TranscriptSourceMapPanel({
   const [critique, setCritique] = useState<z.infer<typeof CritiqueResponseSchema> | null>(null);
   const [coverageFilter, setCoverageFilter] = useState<"all" | "covered" | "not-covered">("all");
   const [mobileExcerptLimit, setMobileExcerptLimit] = useState(80);
+  const [expandedTranscriptLabel, setExpandedTranscriptLabel] = useState<string | null>(null);
   const historyRef = useRef<Record<string, HistoryEntry>>({});
 
   const active = useMemo(() => {
@@ -305,6 +306,51 @@ export function TranscriptSourceMapPanel({
 
   return (
     <div className="space-y-4">
+      {transcriptEntries.length > 0 && (
+        <div className="rounded-xl border border-cyan-500/25 bg-cyan-500/5 p-3 space-y-2">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-cyan-300">Full Source Transcripts (Untruncated)</p>
+          <p className="text-xs text-slate-300">
+            This shows the complete transcript text per slot. Nothing is shortened here, including portions not assigned to a section.
+          </p>
+          <div className="space-y-2">
+            {transcriptEntries.map((entry) => {
+              const words = entry.text.trim().split(/\s+/).filter(Boolean).length;
+              const isOpen = expandedTranscriptLabel === entry.label;
+              return (
+                <div key={entry.label} className="rounded-lg border border-cyan-500/15 bg-slate-900/60 overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => setExpandedTranscriptLabel((prev) => (prev === entry.label ? null : entry.label))}
+                    className="w-full min-h-[48px] px-3 py-2 flex items-center justify-between gap-3 text-left"
+                  >
+                    <div>
+                      <p className="text-xs font-semibold text-cyan-200">{entry.label}</p>
+                      <p className="text-[11px] text-slate-400 tabular-nums">{words.toLocaleString()} words</p>
+                    </div>
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth={2}
+                      className={`h-4 w-4 text-slate-500 transition-transform ${isOpen ? "rotate-180" : ""}`}
+                    >
+                      <path d="M6 9l6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </button>
+                  {isOpen && (
+                    <div className="border-t border-cyan-500/10 px-3 py-2">
+                      <pre className="whitespace-pre-wrap break-words text-xs leading-relaxed text-slate-200 max-h-[42vh] overflow-y-auto">
+                        {entry.text}
+                      </pre>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       <div className="rounded-xl border border-slate-700/50 bg-slate-900/40 p-3">
         <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-slate-500">Section</label>
         <select
