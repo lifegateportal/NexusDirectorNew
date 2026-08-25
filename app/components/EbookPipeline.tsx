@@ -28,6 +28,7 @@ import type {
 } from "@/lib/schemas/ebook";
 import { SectionAssignmentSchema, EbookJobStateSchema } from "@/lib/schemas/ebook";
 import {
+  claimSimilarity,
   extractClaimCandidates,
   findClaimConflicts,
   makeCanonicalIdeaId,
@@ -107,36 +108,18 @@ function parseSignalFilterLog(logEntries: string[]): { state: SignalFilterState;
 
 async function postJson<T>(url: string, body: unknown, retries = 1): Promise<T> {
   const route = routeLabel(url);
-  const isContentMap = url === "/api/ebook/content-map";
-  const requestTimeoutMs = isContentMap ? null : 290_000;
-  const retryableStatuses = isContentMap
-    ? new Set([401, 502, 503, 504])
-    : new Set([429, 500, 502, 503, 504]);
   for (let attempt = 0; attempt <= retries; attempt++) {
     let res: Response;
-    const controller = new AbortController();
-    const timeout = requestTimeoutMs === null
-      ? null
-      : setTimeout(() => controller.abort(), requestTimeoutMs);
     try {
       res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
-        signal: requestTimeoutMs === null ? undefined : controller.signal,
       });
     } catch (err) {
-      if (timeout !== null) clearTimeout(timeout);
-      if (!isContentMap && attempt < retries) {
-        await new Promise<void>((resolve) => setTimeout(resolve, 1500 * (attempt + 1)));
-        continue;
-      }
-      const cause = err instanceof DOMException && err.name === "AbortError"
-        ? `timed out after ${Math.round((requestTimeoutMs ?? 0) / 1000)} seconds`
-        : err instanceof Error ? err.message : "Unknown network failure";
+      const cause = err instanceof Error ? err.message : "Unknown network failure";
       throw new Error([`Request failed: ${route}`, `Cause: ${cause}`].join("\n"));
     }
-    if (timeout !== null) clearTimeout(timeout);
     if (!res.ok) {
       const rawText = await res.text();
       let err: { error?: string; details?: string; route?: string } = {};
@@ -146,14 +129,9 @@ async function postJson<T>(url: string, body: unknown, retries = 1): Promise<T> 
         err = rawText ? { details: rawText } : {};
       }
       const msg = err.error || `HTTP ${res.status} error from ${route}`;
-      if (attempt < retries && retryableStatuses.has(res.status)) {
-        const retryAfterSeconds = Number(res.headers.get("Retry-After"));
-        const delayMs = isContentMap
-          ? 3000
-          : Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
-            ? retryAfterSeconds * 1000
-            : 1500 * (attempt + 1);
-        await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+      // Retry once on transient gateway/auth errors (Codespaces proxy warm-up or LLM timeout)
+      if (attempt < retries && (res.status === 401 || res.status === 502 || res.status === 503 || res.status === 504)) {
+        await new Promise<void>((r) => setTimeout(r, 3000));
         continue;
       }
       // Surface a helpful message for persistent 401s
@@ -223,6 +201,36 @@ async function findSemanticClaimConflicts(
   })).filter((conflict) => conflict.incoming && conflict.prior);
 }
 
+function removeConfirmedDuplicateParagraphs(body: string, conflictingClaims: string[]) {
+  const normalizedConflicts = conflictingClaims
+    .map((claim) => claim.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+  let removedCount = 0;
+  const paragraphs = body.split(/\n{2,}/).filter((paragraph) => paragraph.trim().length > 0);
+  const retained = paragraphs.filter((paragraph) => {
+    const candidates = extractClaimCandidates(paragraph).map((candidate) => candidate.claim);
+    const normalizedCandidates = candidates.map((claim) =>
+      claim.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim()
+    );
+    const matches = conflictingClaims.some((conflict, conflictIndex) =>
+      candidates.some((candidate, candidateIndex) =>
+        claimSimilarity(candidate, conflict) >= 0.62 ||
+        normalizedCandidates[candidateIndex] === normalizedConflicts[conflictIndex]
+      )
+    );
+    if (matches) removedCount += 1;
+    return !matches;
+  });
+  return { body: retained.join("\n\n"), removedCount };
+}
+
+function persistedClaimLedger(claims: ClaimRecord[]) {
+  return claims.map((claim) => ({
+    claim: claim.claim,
+    excerptNumbers: claim.excerptNumbers ?? [],
+  }));
+}
+
 function countWords(text: string): number {
   return text.trim().split(/\s+/).filter(Boolean).length;
 }
@@ -268,7 +276,6 @@ function sanitizeJobStateForPersistence(input: EbookJobState): EbookJobState {
     jobId: String(normalized.jobId),
     status: "idle",
     audioFileNames: [],
-    sourceSlots: [],
     transcripts: [],
     masterTranscript: "",
     filteredTranscript: "",
@@ -2322,7 +2329,6 @@ export function EbookPipeline({
     return {
       ...raw,
       audioFileNames: fixArrays(raw.audioFileNames),
-      sourceSlots: fixArrays(raw.sourceSlots),
       transcripts,
       masterTranscript: fixStr(raw.masterTranscript, rebuiltMasterTranscript),
       filteredTranscript: fixStr((raw as EbookJobState & { filteredTranscript?: unknown }).filteredTranscript),
@@ -2430,21 +2436,17 @@ export function EbookPipeline({
     };
 
     const fromLocal = tryLocalStorage();
-    if (fromLocal) restore(fromLocal);
+    if (fromLocal) { restore(fromLocal); return; }
 
-    // IndexedDB/R2 may contain a newer checkpoint than the synchronous cache.
-    const savedId = localStorage.getItem(JOB_STORAGE_KEY) ?? fromLocal?.jobId;
+    // IndexedDB fallback
+    const savedId = localStorage.getItem(JOB_STORAGE_KEY);
     if (!savedId) return;
     void getEbookJob(savedId).then((job) => {
       if (!job) return;
       // Populate savedJobRef immediately so resume button shows even if normalization fails
       savedJobRef.current = job;
       try {
-        const normalized = normalizeJob(job);
-        if (!fromLocal || Date.parse(normalized.updatedAt) > Date.parse(fromLocal.updatedAt)) {
-          localStorage.setItem(JOB_STATE_KEY, JSON.stringify(normalized));
-          restore(normalized);
-        }
+        restore(normalizeJob(job));
       } catch (err) {
         console.warn("[EbookPipeline] Failed to normalize saved job from IndexedDB:", err);
         // Still populate savedJobRef so resume button shows
@@ -2752,24 +2754,32 @@ export function EbookPipeline({
             "/api/ebook/write-section",
             { assignment: augmentedRegenerationAssignment }
           );
-          const sectionClaims = sectionRes.claimLedger?.length
+          let repairedSectionBody = sectionRes.body;
+          let sectionClaims = sectionRes.claimLedger?.length
             ? sectionRes.claimLedger
             : extractClaimCandidates(sectionRes.body);
           const regenerationConflicts = findClaimConflicts(sectionClaims, regenerationPriorClaims);
           const semanticRegenerationConflicts = await findSemanticClaimConflicts(sectionClaims, regenerationPriorClaims);
           if (regenerationConflicts.length > 0 || semanticRegenerationConflicts.length > 0) {
-            const conflict = regenerationConflicts[0] ?? semanticRegenerationConflicts[0];
-            throw new Error(
-              `Source regeneration duplicate gate blocked Ch ${chapterNum} §${assignment.sectionNumber}: ${conflict.incoming}`
+            const repaired = removeConfirmedDuplicateParagraphs(
+              sectionRes.body,
+              [...regenerationConflicts, ...semanticRegenerationConflicts].map((conflict) => conflict.incoming)
+            );
+            repairedSectionBody = repaired.removedCount > 0 ? repaired.body : "";
+            sectionClaims = extractClaimCandidates(repairedSectionBody);
+            addLog(
+              repaired.removedCount > 0
+                ? `    ↳ Removed ${repaired.removedCount} duplicate paragraph(s) during regeneration`
+                : `    ↳ Omitted Section ${assignment.sectionNumber}; its duplicate could not be isolated safely`
             );
           }
 
           newSections.push({
             sectionNumber: assignment.sectionNumber,
             heading: assignment.heading,
-            body: sectionRes.body,
+            body: repairedSectionBody,
             quotes: sectionRes.quotes,
-            wordCount: countWords(sectionRes.body),
+            wordCount: countWords(repairedSectionBody),
             claimLedger: sectionClaims,
           });
           regenerationPriorClaims.push(...sectionClaims.map((claim) => ({
@@ -2778,7 +2788,7 @@ export function EbookPipeline({
             sectionNumber: assignment.sectionNumber,
           })));
 
-          addLog(`    ✓ Section ${assignment.sectionNumber} — ${countWords(sectionRes.body).toLocaleString()} words`);
+          addLog(`    ✓ Section ${assignment.sectionNumber} — ${countWords(repairedSectionBody).toLocaleString()} words`);
         }
 
         // Step 7b: Polish the chapter (add intro, takeaways, forward question)
@@ -3004,11 +3014,9 @@ export function EbookPipeline({
           status: "transcribing",
           updatedAt: now,
           // Guard against old persisted jobs that may be missing array fields
-          audioFileNames: resume.audioFileNames ?? [],
           chapters: resume.chapters ?? [],
           sections: resume.sections ?? [],
           sectionAssignments: resume.sectionAssignments ?? [],
-          sourceSlots: resume.sourceSlots ?? [],
           transcripts: resume.transcripts ?? [],
           errorLog: resume.errorLog ?? [],
         }
@@ -3016,20 +3024,8 @@ export function EbookPipeline({
           jobId,
           status: "transcribing",
           audioFileNames: audioFiles.filter(Boolean).map((f) => f!.name),
-          sourceSlots: audioFiles.flatMap((audioFile, index) => {
-            const transcriptFile = transcriptFiles[index];
-            const selectedFile = transcriptFile ?? audioFile;
-            return selectedFile ? [{
-              slot: index + 1,
-              label: `Slot-${index + 1}`,
-              fileName: selectedFile.name,
-              sourceType: transcriptFile ? "transcript" as const : "audio" as const,
-            }] : [];
-          }),
           transcripts: [],
           masterTranscript: "",
-          filteredTranscript: "",
-          filterRemovedCount: 0,
           voiceDNA: null,
           contentMap: null,
           architecture: null,
@@ -3037,7 +3033,6 @@ export function EbookPipeline({
           sections: [],
           chapters: [],
           frontMatter: null,
-          backMatter: null,
           exportUrls: null,
           currentStage: "transcribing",
           progress: { total: 0, completed: 0 },
@@ -3076,52 +3071,13 @@ export function EbookPipeline({
         type FilterResult = { cleanedTranscript: string; removedSegments: { reason: string; excerpt: string }[]; summary: string };
         const transcriptResults: { label: string; text: string }[] = [];
 
-        const selectedSlotIndexes = audioFiles.flatMap((audioFile, index) =>
-          audioFile || transcriptFiles[index] ? [index] : []
-        );
-        const savedSlotIndexes = (acc.transcripts ?? []).flatMap((transcript) => {
-          const match = transcript.label.match(/^Slot-(\d+)$/);
-          return match ? [Number(match[1]) - 1] : [];
-        });
-        const configuredSlotIndexes = (acc.sourceSlots ?? []).map((source) => source.slot - 1);
-        const slotsToProcess = [...new Set([
-          ...configuredSlotIndexes,
-          ...selectedSlotIndexes,
-          ...savedSlotIndexes,
-        ])].filter((index) => index >= 0 && index < 10).sort((a, b) => a - b);
-
-        if (
-          resume &&
-          configuredSlotIndexes.length === 0 &&
-          acc.audioFileNames.length > new Set([...selectedSlotIndexes, ...savedSlotIndexes]).size
-        ) {
-          throw new Error("This older checkpoint is missing one or more audio files. Re-select the unfinished audio slots, then resume.");
-        }
-        if (slotsToProcess.length === 0) {
-          throw new Error("No resumable audio or transcript data was found. Re-select the source files and resume.");
-        }
-
         // Reset all statuses to idle before starting
         setAudioSourceStatuses(["idle", "idle", "idle", "idle", "idle", "idle", "idle", "idle", "idle", "idle"]);
 
         setStage("filtering");
-        for (const i of slotsToProcess) {
+        for (let i = 0; i < 10; i++) {
+          if (!audioFiles[i] && !transcriptFiles[i]) continue;
           const label = `Slot-${i + 1}`;
-          const savedTranscript = acc.transcripts.find((transcript) => transcript.label === label);
-          if (savedTranscript?.text.trim()) {
-            transcriptResults.push(savedTranscript);
-            setAudioSourceStatuses((prev) => {
-              const next = [...prev];
-              next[i] = "complete";
-              return next;
-            });
-            addLog(`↩ ${label} transcript restored — ${countWords(savedTranscript.text).toLocaleString()} words`);
-            continue;
-          }
-
-          if (!audioFiles[i] && !transcriptFiles[i]) {
-            throw new Error(`${label} still needs its source file. Re-select "${acc.sourceSlots.find((source) => source.slot === i + 1)?.fileName ?? label}" and resume.`);
-          }
           
           // Mark as transcribing
           setAudioSourceStatuses((prev) => {
@@ -3130,17 +3086,7 @@ export function EbookPipeline({
             return next;
           });
 
-          let rawText: string;
-          try {
-            rawText = await resolveSlot(audioFiles[i], transcriptFiles[i], label);
-          } catch (slotError) {
-            setAudioSourceStatuses((prev) => {
-              const next = [...prev];
-              next[i] = "error";
-              return next;
-            });
-            throw slotError;
-          }
+          const rawText = await resolveSlot(audioFiles[i], transcriptFiles[i], label);
 
           // Mark as complete
           setAudioSourceStatuses((prev) => {
@@ -3169,8 +3115,6 @@ export function EbookPipeline({
           }
 
           transcriptResults.push({ label, text: slotText });
-          acc.transcripts = [...transcriptResults];
-          await checkpoint("transcribing");
         }
         masterTranscript = transcriptResults
           .map((t) => `[${t.label}]\n${t.text}`)
@@ -3622,8 +3566,9 @@ export function EbookPipeline({
                 }
                 addLog(`  ✓ Chapter ${assignment.chapterNumber} plan ready (${chapterPlanMap.size} sections planned)`);
               } catch (planErr) {
-                addLog(`  ⚠ Chapter plan failed — falling back to per-section source planning`);
+                addLog(`  ✗ Chapter plan failed — drafting stopped before unowned prose could be written`);
                 console.warn("[chapter-plan] failed:", planErr);
+                throw planErr;
               }
             }
           }
@@ -3898,7 +3843,17 @@ export function EbookPipeline({
             (conflict) => conflict.prior.chapterNumber !== assignment.chapterNumber
           );
           if (claimConflicts.length > 0) {
-            addLog(`  ⚠ ${claimConflicts.length} duplicate claim(s) remain after rewrite — flagged for final review`);
+            const repaired = removeConfirmedDuplicateParagraphs(
+              body,
+              claimConflicts.map((conflict) => conflict.incoming)
+            );
+            body = repaired.removedCount > 0 ? repaired.body : "";
+            effectiveClaimLedger = extractClaimCandidates(body);
+            addLog(
+              repaired.removedCount > 0
+                ? `  ↳ Removed ${repaired.removedCount} unresolved duplicate paragraph(s); continuing pipeline`
+                : `  ↳ Omitted §${assignment.sectionNumber} because its unresolved duplicate could not be isolated safely`
+            );
           }
         }
 
@@ -3909,7 +3864,7 @@ export function EbookPipeline({
           heading: assignment.heading,
           body,
           wordCount: finalWc,
-          claimLedger: effectiveClaimLedger,
+          claimLedger: persistedClaimLedger(effectiveClaimLedger),
           status: "complete",
         };
         allSections.push(draft);
@@ -4029,7 +3984,7 @@ export function EbookPipeline({
                 wordCount: countWords(rewritten.body),
                 claimLedger: rewritten.claimLedger.length > 0
                   ? rewritten.claimLedger
-                  : extractClaimCandidates(rewritten.body),
+                  : persistedClaimLedger(extractClaimCandidates(rewritten.body)),
               };
               allSections[sectionIndex] = rewrittenDraft;
               setChapters((prev) => prev.map((chapter) =>
@@ -4055,9 +4010,48 @@ export function EbookPipeline({
                 });
               const remainingConflicts = await findSemanticClaimConflicts(rewrittenChapterClaims, priorChapterClaims);
               if (remainingConflicts.length > 0) {
-                  addLog(`  ⚠ Chapter ${assignment.chapterNumber} retains ${remainingConflicts.length} semantic duplicate(s) after rewrite — flagged for final review`);
-                } else {
-                  addLog(`  ✓ Chapter ${assignment.chapterNumber} semantic ownership verified`);
+                const confirmedClaimsBySection = new Map<number, string[]>();
+                for (const conflict of remainingConflicts) {
+                  const incoming = rewrittenChapterClaims[conflict.incomingIndex];
+                  if (!incoming?.sectionNumber) continue;
+                  const claims = confirmedClaimsBySection.get(incoming.sectionNumber) ?? [];
+                  claims.push(incoming.claim);
+                  confirmedClaimsBySection.set(incoming.sectionNumber, claims);
+                }
+
+                for (const [sectionNumber, confirmedClaims] of confirmedClaimsBySection) {
+                  const sectionIndex = allSections.findIndex(
+                    (section) => section.chapterNumber === assignment.chapterNumber && section.sectionNumber === sectionNumber
+                  );
+                  if (sectionIndex < 0) continue;
+                  const repaired = removeConfirmedDuplicateParagraphs(
+                    allSections[sectionIndex].body ?? "",
+                    confirmedClaims
+                  );
+                  const repairedBody = repaired.removedCount > 0 ? repaired.body : "";
+                  const repairedDraft: SectionDraft = {
+                    ...allSections[sectionIndex],
+                    body: repairedBody,
+                    wordCount: countWords(repairedBody),
+                    claimLedger: persistedClaimLedger(extractClaimCandidates(repairedBody)),
+                  };
+                  allSections[sectionIndex] = repairedDraft;
+                  setChapters((prev) => prev.map((chapter) =>
+                    chapter.number === assignment.chapterNumber
+                      ? {
+                          ...chapter,
+                          sections: chapter.sections.map((section) =>
+                            section.sectionNumber === sectionNumber ? repairedDraft : section
+                          ),
+                        }
+                      : chapter
+                  ));
+                  addLog(
+                    repaired.removedCount > 0
+                      ? `  ↳ Removed ${repaired.removedCount} confirmed duplicate paragraph(s) from §${sectionNumber}`
+                      : `  ↳ Omitted §${sectionNumber} because its semantic duplicate could not be isolated safely`
+                  );
+                }
               }
 
               currentChapterProse = allSections
@@ -4070,12 +4064,16 @@ export function EbookPipeline({
               for (const section of allSections) {
                 for (const label of extractIllustrationLabels(section.body ?? "")) usedIllustrations.add(label);
               }
+              addLog(`  ✓ Chapter ${assignment.chapterNumber} semantic ownership verified`);
             }
           }
         }
 
         setProgress({ total: totalSections, completed: completedCount });
-        addLog(`  ✓ ${finalWc.toLocaleString()} words written`);
+        const completedDraft = allSections.find(
+          (section) => section.chapterNumber === assignment.chapterNumber && section.sectionNumber === assignment.sectionNumber
+        );
+        addLog(`  ✓ ${(completedDraft?.wordCount ?? finalWc).toLocaleString()} words written`);
         // Save after every section so a refresh never loses completed work
         acc.sections = [...allSections];
         acc.progress = { total: totalSections, completed: completedCount };
@@ -4248,7 +4246,7 @@ export function EbookPipeline({
       setQualityReport(quality);
       const duplicateErrors = quality.issues.filter((issue) => issue.code === "DUPLICATE_IDEA" && issue.severity === "error");
       if (duplicateErrors.length > 0) {
-        addLog(`⚠ Quality review found ${duplicateErrors.length} unresolved duplicate claim(s) — draft remains available for review.`);
+        addLog(`⚠ Draft completed with ${duplicateErrors.length} duplicate idea warning(s); export remains blocked until they are resolved.`);
       }
       if (quality.pass) {
         addLog(`✓ Quality score: ${quality.score}/100`);
@@ -4308,13 +4306,13 @@ export function EbookPipeline({
   const hasResumableState = Boolean(
     savedJobRef.current && (
       savedJobRef.current.masterTranscript ||
-      (savedJobRef.current.transcripts?.length ?? 0) > 0 ||
+      savedJobRef.current.transcripts.length > 0 ||
       savedJobRef.current.voiceDNA ||
       savedJobRef.current.contentMap ||
       savedJobRef.current.architecture ||
-      (savedJobRef.current.sectionAssignments?.length ?? 0) > 0 ||
-      (savedJobRef.current.sections?.length ?? 0) > 0 ||
-      (savedJobRef.current.chapters?.length ?? 0) > 0 ||
+      savedJobRef.current.sectionAssignments.length > 0 ||
+      savedJobRef.current.sections.length > 0 ||
+      savedJobRef.current.chapters.length > 0 ||
       savedJobRef.current.frontMatter
     )
   );
@@ -5066,10 +5064,8 @@ export function EbookPipeline({
                 if (!saved.voiceDNA) return "Resume — retry from Voice DNA";
                 if (!saved.contentMap) return "Resume — retry from Content Map";
                 if (!saved.architecture) return "Resume — retry from Chapter Design";
-                const assignmentCount = saved.sectionAssignments?.length ?? 0;
-                const sectionCount = saved.sections?.length ?? 0;
-                if (assignmentCount === 0) return "Resume — retry from Assign Segments";
-                if (sectionCount < assignmentCount) return `Resume — continue writing (${sectionCount} / ${assignmentCount} sections done)`;
+                if (saved.sectionAssignments.length === 0) return "Resume — retry from Assign Segments";
+                if (saved.sections.length < (saved.sectionAssignments.length || 1)) return `Resume — continue writing (${saved.sections.length} / ${saved.sectionAssignments.length} sections done)`;
                 if (!saved.frontMatter) return "Resume — retry from Front Matter";
                 return "Resume pipeline";
               })()}

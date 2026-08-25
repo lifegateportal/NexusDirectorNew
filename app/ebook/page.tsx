@@ -20,7 +20,7 @@ import {
   generateEbookProjectId,
 } from "@/lib/ebook-project-store";
 import type { EbookProject } from "@/lib/ebook-project-store";
-import { clearEbookJobs, getEbookJob, listEbookJobs } from "@/lib/ebook-job-store";
+import { getEbookJob, listEbookJobs } from "@/lib/ebook-job-store";
 
 const JOB_STATE_KEY = "nexus_ebook_job_state";
 const JOB_STORAGE_KEY = "nexus_ebook_current_job"; // IndexedDB job-ID pointer
@@ -339,28 +339,24 @@ function EbookPageClient() {
   }, []);
 
   const readResumableJobState = useCallback(async (): Promise<EbookJobState | null> => {
-    let localJob: EbookJobState | null = null;
     try {
       const raw = localStorage.getItem(JOB_STATE_KEY);
       if (raw) {
         const parsed = normalizeJobStateForSave(JSON.parse(raw) as unknown);
-        if (hasResumableProgress(parsed)) localJob = parsed;
+        if (hasResumableProgress(parsed)) return parsed;
       }
     } catch {
-      // Fall through to durable checkpoint lookup.
+      // Fall through to IndexedDB lookup.
     }
 
     try {
-      const savedJobId = localStorage.getItem(JOB_STORAGE_KEY) ?? localJob?.jobId;
+      const savedJobId = localStorage.getItem(JOB_STORAGE_KEY);
       if (savedJobId) {
         const fromStore = await getEbookJob(savedJobId).catch(() => null);
-        const storedJob = normalizeJobStateForSave(fromStore);
-        const newest = [localJob, storedJob]
-          .filter((job): job is EbookJobState => hasResumableProgress(job))
-          .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))[0] ?? null;
-        if (newest) {
-          localStorage.setItem(JOB_STATE_KEY, JSON.stringify(newest));
-          return newest;
+        const parsed = normalizeJobStateForSave(fromStore);
+        if (hasResumableProgress(parsed)) {
+          localStorage.setItem(JOB_STATE_KEY, JSON.stringify(parsed));
+          return parsed;
         }
       }
 
@@ -376,7 +372,7 @@ function EbookPageClient() {
       localStorage.setItem(JOB_STATE_KEY, JSON.stringify(newestResumable));
       return newestResumable;
     } catch {
-      return localJob;
+      return null;
     }
   }, [normalizeJobStateForSave]);
 
@@ -762,31 +758,19 @@ function EbookPageClient() {
     URL.revokeObjectURL(url);
   }, [ebookManifest]);
 
-  const handleStartFreshProject = useCallback(async () => {
+  const handleStartFreshProject = useCallback(() => {
     const confirmed = window.confirm(
       "Start a fresh book project? This will clear the current in-progress pipeline from this screen, but your saved projects will remain available."
     );
     if (!confirmed) return;
 
     try {
-      // Clear all resumable pipeline checkpoints so nothing can restart in the background.
-      await clearEbookJobs();
-
       localStorage.removeItem(JOB_STATE_KEY);
       localStorage.removeItem(PENDING_MOUNT_KEY);
-      localStorage.removeItem(JOB_STORAGE_KEY);
-
-      // Clear cached narration artifacts tied to past pipeline jobs.
-      const keysToRemove: string[] = [];
-      for (let i = 0; i < localStorage.length; i += 1) {
-        const key = localStorage.key(i);
-        if (key?.startsWith(VOICE_STUDIO_STORAGE_PREFIX)) {
-          keysToRemove.push(key);
-        }
-      }
-      for (const key of keysToRemove) {
-        localStorage.removeItem(key);
-      }
+      // Clear the job-ID pointer so the remounted pipeline doesn't restore
+      // the old job from IndexedDB. Previously this key was left behind, causing
+      // the pipeline to silently reload the previous project's state on remount.
+      localStorage.removeItem("nexus_ebook_current_job");
     } catch {
       // localStorage unavailable; in-memory reset still applies
     }
@@ -800,19 +784,18 @@ function EbookPageClient() {
     setAssistantOpen(false);
     setActiveTab("pipeline");
     setPipelineKey((k) => k + 1);
-    // Hard reload guarantees all in-flight fetches from the previous run are terminated.
-    window.location.replace("/ebook?tab=pipeline");
-  }, []);
+    setStatusMsg({ type: "success", text: "Started a fresh book project." });
+    router.replace("/ebook?tab=pipeline");
+  }, [router]);
 
   const handleContinuePipeline = useCallback(async () => {
     // The mounted pipeline reports every checkpoint through onJobStateChange.
     // Prefer that live state because an error may occur before an async
     // IndexedDB write completes or mobile Safari flushes storage.
     const liveJob = liveJobStateRef.current;
-    const persistedJob = await readResumableJobState();
-    const job = [liveJob, persistedJob]
-      .filter((candidate): candidate is EbookJobState => hasResumableProgress(candidate))
-      .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))[0] ?? null;
+    const job = hasResumableProgress(liveJob)
+      ? liveJob
+      : await readResumableJobState();
     if (!job) {
       setStatusMsg({ type: "error", text: "No resumable pipeline checkpoint found." });
       setHasContinueState(false);
@@ -876,7 +859,7 @@ function EbookPageClient() {
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
-                    onClick={() => { void handleStartFreshProject(); }}
+                    onClick={handleStartFreshProject}
                     className="flex min-h-12 items-center gap-2 rounded-xl border border-amber-500/35 bg-amber-500/10 px-3.5 py-2 text-xs font-semibold text-amber-300 transition hover:border-amber-400/60 hover:bg-amber-500/15 active:scale-[0.97]"
                   >
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} className="h-4 w-4">

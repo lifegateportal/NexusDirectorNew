@@ -102,21 +102,20 @@ export async function POST(req: NextRequest) {
 ═══ SCRIPTURE FORMATTING (Chicago Manual + Premium Print) ═══
 
 SHORT INLINE (under 40 words, woven into sentence):
-*"verse text"* (Book Chapter:Verse, Translation)
-Example: Paul writes *"I can do all things through Christ who strengthens me"* (Philippians 4:13, NIV).
+*"verse text"* (Book Chapter:Verse Translation)
+Example: Paul writes *"I can do all things through Christ who strengthens me"* (Philippians 4:13 NIV).
 
 SHORT STANDALONE (under 40 words, quoted as own statement):
 > Verse text here.
-> *Book Chapter:Verse, Translation*
+> — Book Chapter:Verse (Translation)
 
 LONG BLOCK (40+ words — mandatory blockquote, no quotation marks):
 > Verse text here, continuing across
 > multiple lines as needed.
-> *Book Chapter:Verse, Translation*
+> — Book Chapter:Verse (Translation)
 
 CRITICAL SCRIPTURE RULES:
-• Use a comma before the verified translation abbreviation: (Psalm 27:1, NIV), not (Psalm 27:1 NIV)
-• Use an en dash in verse ranges: Titus 2:11–14
+• Reference ALWAYS ends with translation in parentheses: (NIV), (KJV), (ESV)
 • Place the reference on its own final blockquote line
 • Block quotes NEVER use quotation marks around verse text
 • Reproduce scripture EXACTLY from the VERIFIED SCRIPTURES supplied below. Never reconstruct verse text from memory.

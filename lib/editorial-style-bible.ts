@@ -3,8 +3,6 @@ export const READER_NORMALIZATION_RULES = `READER NORMALIZATION (book-first):
 - Never address a live audience anywhere in the book.
 - Remove room-control cues and response prompts (e.g., "say amen", "look at your neighbor", applause cues, altar-response directives).
 - Rewrite stage/location references ("in this room", "as you sit here today") into direct reader language.
-- Remove calendar, service, and sermon-series framing such as "this month," "this week," "today's service," and "in this series." Replace it with timeless book context only when the source supplies a clear subject; otherwise delete the framing.
-- Preserve the author's pastoral direct address, exhortations, declarations, and relational warmth. Remove oral setup such as "I want you to understand," "let me explain," and "I want to show you" only when the following sentence can deliver the same teaching directly.
 - Preserve meaning, doctrine, and argument sequence exactly; only change delivery mode.`;
 
 export const SOURCE_LOCK_RULES = `════════════════════════════════════════════
@@ -78,21 +76,6 @@ ZERO-FRICTION EMPATHY & STAKES:
   a shared human reality, not a distant observation.
 - Address the tension directly and simply. Do not add melodrama, urgency, or 
   inspiration that the transcript itself does not contain.
-
-CLAIM-STRENGTH FIDELITY:
-- Preserve the exact certainty, scope, and force of the speaker's claim.
-- Never strengthen a qualified statement into an absolute promise, and never weaken an explicit declaration into cautious language.
-- Words such as "always," "never," "complete," "permanent," "cannot," and "will" may appear only when that degree of certainty is explicit in the source.
-
-LOCAL LOGIC AND REFERENTS:
-- Every contrast must compare genuinely distinct ideas and preserve the speaker's intended logic.
-- Every pronoun and backward reference must have a clear antecedent in the continuous chapter. Preserve references such as "this" or "the same truth" when the preceding section supplies that antecedent.
-- Prefer the source-named subject over vague constructions such as "there is someone," "this thing," or "what happened with it." Never invent an actor merely to make a sentence more specific.
-
-ANECDOTES AND ILLUSTRATIONS:
-- Include a personal story only when the source provides enough setup, connection, and payoff for a reader to understand why it belongs. If essential context is absent, compress the story to its supported lesson or omit it; never invent the missing context.
-- Give each illustration one clear function. Do not embellish it with new comic details, comparisons, or implications.
-- For sexuality, trauma, addiction, and other sensitive subjects, preserve the author's candor while using dignified, reader-safe language.
 
 CONCRETE ANCHORING:
 - Prefer a supported action, image, event, or stated consequence over generic explanation.
@@ -180,12 +163,6 @@ OPENING SENTENCES:
 - Never open with a generalization when a specific detail from the transcript is available.
 - Avoid opening with "This chapter", "This section", or "In this passage" — drop the reader into the idea, not a table of contents.
 
-CHAPTER OPENINGS:
-- Open with the strongest source-supported Scripture, tension, declaration, or image that establishes the chapter's governing question. State the central distinction within the first two or three paragraphs.
-- Do not invent a story, rhetorical question, dramatic scene, or inspirational hook when the source already supplies a strong opening.
-- Do not force a fashionable hook ahead of a controlling Scripture. When the Scripture creates the chapter's tension and establishes its premise, let it lead.
-- Replace vague developmental language such as "another level," "a higher place," or "a new dimension" with the specific source-supported change. Do not add specificity the source does not provide.
-
 TRANSITIONS:
 - Transitions must create logical pull toward the next idea, not summarize what just happened.
 - Mid-chapter summary transitions ("So, as we have seen...", "To summarize...") are forbidden.
@@ -203,13 +180,6 @@ KEY TERM CONSISTENCY:
 - Identify the author's preferred term for key concepts from the Voice DNA preferredTerminology. Use that exact term throughout — never swap in a synonym for variety.
 - If the author says "agape love," every reference in the chapter uses "agape love," not "God's love," "divine love," or "unconditional love."
 - Inconsistent terminology is a mark of unpolished writing. Standardize on the author's own words.
-
-HOUSE-STYLE CONSISTENCY:
-- Apply one consistent divine-pronoun capitalization style to original prose, inferred from the dominant source usage. Never alter capitalization inside verified Scripture text.
-- Use concise, idiomatic book language for titles and headings. Preserve the source thesis while removing unnecessary helper verbs and oral setup. If a title sounds like a sermon sentence rather than a published heading, compress it without changing its meaning.
-
-FINAL PRODUCTION PROOFREAD:
-Before returning prose, silently correct unclear referents, faulty contrasts, incomplete anecdotes, residual sermon context, inconsistent divine-pronoun capitalization, malformed citations, unmatched quotation marks, and doubled or missing punctuation. Correct presentation only; never add, remove, reinterpret, or theologically revise the speaker's teaching.
 
 DIALOGUE AND CONVERSATION FORMATTING:
 When the author recounts a conversation, exchange, or paraphrased dialogue (including conversations with God, prayers, or interpersonal exchanges from the transcript), apply these formatting rules:
