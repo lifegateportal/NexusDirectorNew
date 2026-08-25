@@ -9,6 +9,12 @@ import { hydrateScriptureQuotes } from "@/lib/scripture-service";
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
+function trimToWordLimit(text: string, maxWords: number): string {
+  const words = text.trim().split(/\s+/);
+  if (words.length <= maxWords) return text.trim();
+  return `${words.slice(0, maxWords).join(" ")} […]`;
+}
+
 export async function POST(req: NextRequest) {
   const body = await req.json() as unknown;
   let input;
@@ -105,9 +111,30 @@ These 3-gram constructions are already overused across prior chapters. Avoid the
 
   // ── Build section payload ──────────────────────────────────────────────────
   const sectionPayload = sections.map((sec, idx) => {
-    const excerpts = (sec.transcriptExcerpts ?? [])
-      .map((e) => cleanTranscriptForBook(e).trim())
-      .filter(Boolean)
+    // Keep chapter-writer input bounded so structured JSON generation remains stable
+    // on long chapters with dense transcript excerpts.
+    const excerptWordCap = 260;
+    const sectionWordCap = 1600;
+    let sectionWordTally = 0;
+    const boundedExcerpts: string[] = [];
+    for (const rawExcerpt of (sec.transcriptExcerpts ?? [])) {
+      const cleaned = cleanTranscriptForBook(rawExcerpt).trim();
+      if (!cleaned) continue;
+      const bounded = trimToWordLimit(cleaned, excerptWordCap);
+      const wc = bounded.split(/\s+/).filter(Boolean).length;
+      if (sectionWordTally >= sectionWordCap) break;
+      if (sectionWordTally + wc > sectionWordCap) {
+        const remaining = Math.max(80, sectionWordCap - sectionWordTally);
+        const tail = trimToWordLimit(bounded, remaining);
+        boundedExcerpts.push(tail);
+        sectionWordTally = sectionWordCap;
+        break;
+      }
+      boundedExcerpts.push(bounded);
+      sectionWordTally += wc;
+    }
+
+    const excerpts = boundedExcerpts
       .map((e, i) => `[${i + 1}] ${e}`)
       .join("\n\n");
     const planBlock = (sec.assignedPlan ?? []).length > 0

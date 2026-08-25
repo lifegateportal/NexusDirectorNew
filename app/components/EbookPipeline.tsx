@@ -4154,6 +4154,12 @@ export function EbookPipeline({
       } catch (err) {
         addLog(`⚠ Front matter save failed: ${err instanceof Error ? err.message : 'unknown error'}`);
       }
+      try {
+        localStorage.setItem(JOB_STORAGE_KEY, persistableFailure.jobId);
+        localStorage.setItem(JOB_STATE_KEY, JSON.stringify(persistableFailure));
+      } catch (storageErr) {
+        addLog(`⚠ localStorage failure-checkpoint save failed: ${storageErr instanceof Error ? storageErr.message : "quota exceeded"}`);
+      }
       // Update savedJobRef so the Resume button has the partial state
       savedJobRef.current = { ...persistableFailure };
       onJobStateChange?.({ ...persistableFailure });
@@ -4166,7 +4172,7 @@ export function EbookPipeline({
 
   const isRunning = stage !== "idle" && stage !== "complete" && stage !== "failed";
   const hasResumableState = Boolean(
-    savedJobRef.current && (
+    (savedJobRef.current && (
       savedJobRef.current.masterTranscript ||
       savedJobRef.current.transcripts.length > 0 ||
       savedJobRef.current.voiceDNA ||
@@ -4181,7 +4187,13 @@ export function EbookPipeline({
       savedJobRef.current.status === "writing" ||
       savedJobRef.current.status === "polishing" ||
       savedJobRef.current.status === "frontmatter"
-    )
+    )) ||
+    (stage === "failed" && (
+      progress.completed > 0 ||
+      sectionAssignments.length > 0 ||
+      chapters.length > 0 ||
+      sourceTranscripts.length > 0
+    ))
   );
 
   return (
@@ -4913,7 +4925,30 @@ export function EbookPipeline({
             <button
               type="button"
               onClick={() => {
-                const saved = savedJobRef.current!;
+                const saved = savedJobRef.current ?? sanitizeJobStateForPersistence({
+                  jobId: jobIdRef.current,
+                  status: stage,
+                  audioFileNames: (audioFiles ?? []).map((f) => f?.name ?? ""),
+                  transcripts: sourceTranscripts,
+                  masterTranscript: savedJobRef.current?.masterTranscript ?? "",
+                  filteredTranscript: savedJobRef.current?.filteredTranscript ?? "",
+                  filterRemovedCount: savedJobRef.current?.filterRemovedCount ?? 0,
+                  voiceDNA: savedJobRef.current?.voiceDNA ?? null,
+                  contentMap: savedJobRef.current?.contentMap ?? null,
+                  architecture: savedJobRef.current?.architecture ?? null,
+                  sectionAssignments,
+                  sections: chapters.flatMap((ch) => ch.sections),
+                  chapters,
+                  frontMatter: savedJobRef.current?.frontMatter ?? null,
+                  backMatter: savedJobRef.current?.backMatter ?? null,
+                  exportUrls: null,
+                  currentStage: stage,
+                  progress,
+                  errorLog: logRef.current,
+                  createdAt: new Date().toISOString(),
+                  updatedAt: new Date().toISOString(),
+                });
+                savedJobRef.current = saved;
                 setError(null);
                 setSignalFilterState(parseSignalFilterLog(saved.errorLog ?? []).state);
                 setSignalFilterDetail(parseSignalFilterLog(saved.errorLog ?? []).detail);
