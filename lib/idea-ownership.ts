@@ -67,7 +67,7 @@ export function extractClaimCandidates(body: string): ClaimRecord[] {
 export function findClaimConflicts(
   incoming: ClaimRecord[],
   existing: Array<ClaimRecord & { chapterNumber: number; sectionNumber: number }>,
-  threshold = 0.72,
+  threshold = 0.80,
 ) {
   return incoming.flatMap((candidate) => {
     let strongest: (ClaimRecord & { chapterNumber: number; sectionNumber: number; similarity: number }) | null = null;

@@ -55,7 +55,7 @@ Do NOT flag:
 - distinct steps in one argument;
 - complementary claims that answer different questions.
 
-Flag semantic duplication even when wording, syntax, examples, or synonyms differ. Return only conflicts with confidence of at least 0.82. Indexes are zero-based and must reference the supplied arrays.`,
+Flag semantic duplication even when wording, syntax, examples, or synonyms differ. Return only conflicts with confidence of at least 0.88. Indexes are zero-based and must reference the supplied arrays.`,
       prompt: `INCOMING CLAIMS:
 ${parsed.data.incoming.map((claim, index) => `[I${index}] ${claim.claim}`).join("\n")}
 
@@ -64,7 +64,7 @@ ${parsed.data.existing.map((claim, index) => `[E${index}] Ch ${claim.chapterNumb
     });
 
     const conflicts = object.conflicts.filter((conflict) =>
-      conflict.confidence >= 0.82 &&
+      conflict.confidence >= 0.88 &&
       conflict.incomingIndex < parsed.data.incoming.length &&
       conflict.existingIndex < parsed.data.existing.length
     );
