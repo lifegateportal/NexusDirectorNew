@@ -76,6 +76,7 @@ SEGMENT EXTRACTION RULES
 - Each segment: 200-600 words of teaching material
 - Aim for 8-15 segments per recording (fewer for shorter messages, more for long teachings)
 - Skip non-teaching content: prayers, announcements, "turn to your neighbor", altar calls
+- Each segment MUST include rawText: a verbatim excerpt copied from the transcript for that segment (roughly 120-320 words)
 
 TOPIC NAMING:
 - Name segments by their teaching claim, never use structural labels
@@ -120,7 +121,7 @@ Examples: ["anointing", "kingdom authority", "pressing in", "contend for breakth
 TONE MAP: Conversational quality (3-5 adjectives)
 Example: "Passionate, authoritative, encouraging, scriptural, direct"
 
-Output all content in a single structured object. Do NOT output raw transcript text.`;
+Output all content in a single structured object.`;
 
 export async function POST(req: NextRequest) {
   try {

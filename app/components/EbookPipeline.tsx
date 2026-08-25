@@ -204,7 +204,7 @@ function adaptUnifiedContentMap(unified: UnifiedContentMap): ContentMap {
     id: seg.id,
     sourceAudio: "audio-1" as const, // Default to audio-1 since unified doesn't track this
     topic: seg.topic,
-    rawText: "", // Unified content map doesn't store raw text (optimization)
+    rawText: seg.rawText,
     keyPoints: seg.keyPoints,
     quotes: seg.quotes,
     estimatedWordCount: seg.estimatedWordCount,

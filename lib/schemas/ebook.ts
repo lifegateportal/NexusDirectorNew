@@ -76,6 +76,9 @@ export const ContentMapSchema = z.object({
 export const UnifiedContentSegmentSchema = z.object({
   id: z.string(),
   topic: z.string(),
+  // Verbatim excerpt from the transcript for this segment.
+  // Required so downstream planning/writing remains source-backed.
+  rawText: z.string().min(20),
   keyPoints: z.array(z.string()).default([]),
   quotes: z.array(QuoteSchema).default([]),
   estimatedWordCount: z.number(),
