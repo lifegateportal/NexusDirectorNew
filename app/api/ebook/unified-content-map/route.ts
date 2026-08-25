@@ -73,14 +73,18 @@ YOU MUST NOT:
 SEGMENT EXTRACTION RULES
 ═══════════════════════════════════════════════════════════════════
 - Identify natural topic shifts as segment boundaries
-- Each segment: 200-600 words of teaching material
+- Each segment: 300-900 words of teaching material (except truly short final carryover segments)
 - Aim for 8-15 segments per recording (fewer for shorter messages, more for long teachings)
 - Skip non-teaching content: prayers, announcements, "turn to your neighbor", altar calls
-- Each segment MUST include rawText: a verbatim excerpt copied from the transcript for that segment (roughly 120-320 words)
+- Each segment MUST include rawText: a contiguous VERBATIM excerpt copied from the transcript for that segment
+- rawText must not be summarized, compressed, paraphrased, or clipped to a teaser snippet
+- rawText must not contain "[…]" or ellipsis-based truncation
+- rawText should usually be 220-700 words unless the segment itself is naturally shorter
 - Each segment MUST include sourceAudio mapped to the slot marker where that excerpt appears:
   [Slot-1] -> audio-1, [Slot-2] -> audio-2, ... [Slot-10] -> audio-10
 - Do NOT merge content from different slot markers into a single segment.
 - one segment belongs to exactly one sourceAudio value.
+- COVERAGE REQUIREMENT: Across all segments, rawText excerpts should preserve most teaching material from the transcript. Do not collapse large argument blocks into tiny snippets.
 
 TOPIC NAMING:
 - Name segments by their teaching claim, never use structural labels
@@ -181,7 +185,32 @@ Focus on teaching segments, narrative arc, story inventory, and scripture positi
       const normalizedSegments = contentMap.object.segments.map((seg, idx) => ({
         ...seg,
         id: seg.id || `seg-${idx + 1}`,
+        estimatedWordCount: Math.max(
+          seg.estimatedWordCount,
+          seg.rawText.trim().split(/\s+/).filter(Boolean).length
+        ),
       }));
+
+      const segmentWordTotal = normalizedSegments.reduce(
+        (sum, seg) => sum + seg.rawText.trim().split(/\s+/).filter(Boolean).length,
+        0
+      );
+      const shortSegments = normalizedSegments.filter(
+        (seg) => seg.rawText.trim().split(/\s+/).filter(Boolean).length < 160
+      );
+
+      // Strict quality gate: prevent tiny/truncated segment payloads from entering
+      // downstream planning/writing. This avoids underwritten manuscripts.
+      if (segmentWordTotal < Math.round(transcriptWordCount * 0.58)) {
+        throw new Error(
+          `Unified content map coverage too low (${segmentWordTotal}/${transcriptWordCount} words preserved in segment excerpts). Regenerate with full-length contiguous rawText excerpts.`
+        );
+      }
+      if (shortSegments.length > Math.floor(normalizedSegments.length * 0.4)) {
+        throw new Error(
+          `Too many short segment excerpts (${shortSegments.length}/${normalizedSegments.length}). Regenerate with larger rawText excerpts per segment.`
+        );
+      }
 
       // Calculate total words if not provided
       const totalWords = contentMap.object.totalEstimatedWords ||
@@ -197,6 +226,7 @@ Focus on teaching segments, narrative arc, story inventory, and scripture positi
         `[unified-content-map] Extracted ${result.segments.length} segments, ` +
         `${result.storyInventory.length} stories, ` +
         `${totalWords} estimated words, ` +
+        `${segmentWordTotal} raw excerpt words, ` +
         `thesis: "${result.coreThesis.slice(0, 80)}..."`
       );
 
