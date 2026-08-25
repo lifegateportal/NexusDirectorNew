@@ -25,10 +25,10 @@ import type {
   BackMatter,
   EbookJobState,
   EbookManifest,
+  UnifiedContentMap,
 } from "@/lib/schemas/ebook";
 import { SectionAssignmentSchema, EbookJobStateSchema } from "@/lib/schemas/ebook";
 import {
-  claimSimilarity,
   extractClaimCandidates,
   findClaimConflicts,
   makeCanonicalIdeaId,
@@ -108,18 +108,27 @@ function parseSignalFilterLog(logEntries: string[]): { state: SignalFilterState;
 
 async function postJson<T>(url: string, body: unknown, retries = 1): Promise<T> {
   const route = routeLabel(url);
+  const requestTimeoutMs = 290_000;
   for (let attempt = 0; attempt <= retries; attempt++) {
     let res: Response;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), requestTimeoutMs);
     try {
       res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
+        signal: controller.signal,
       });
     } catch (err) {
+      window.clearTimeout(timeout);
+      if (err instanceof DOMException && err.name === "AbortError") {
+        throw new Error(`Request timed out: ${route} (the pipeline can be resumed to retry this step)`);
+      }
       const cause = err instanceof Error ? err.message : "Unknown network failure";
       throw new Error([`Request failed: ${route}`, `Cause: ${cause}`].join("\n"));
     }
+    window.clearTimeout(timeout);
     if (!res.ok) {
       const rawText = await res.text();
       let err: { error?: string; details?: string; route?: string } = {};
@@ -171,68 +180,72 @@ async function findSemanticClaimConflicts(
   existing: Array<ClaimRecord & { chapterNumber: number; sectionNumber: number }>,
 ) {
   if (incoming.length === 0 || existing.length === 0) return [];
-  const requests: Array<Promise<Array<{
-    incomingIndex: number;
-    existingIndex: number;
-    reason: string;
-    confidence: number;
-  }>>> = [];
-  for (let incomingOffset = 0; incomingOffset < incoming.length; incomingOffset += 40) {
-    for (let existingOffset = 0; existingOffset < existing.length; existingOffset += 400) {
-      const incomingChunk = incoming.slice(incomingOffset, incomingOffset + 40);
-      const existingChunk = existing.slice(existingOffset, existingOffset + 400);
-      requests.push(
-        postJson<{
-          conflicts: Array<{ incomingIndex: number; existingIndex: number; reason: string; confidence: number }>;
-        }>("/api/ebook/validate-claims", { incoming: incomingChunk, existing: existingChunk })
-          .then((result) => result.conflicts.map((conflict) => ({
-            ...conflict,
-            incomingIndex: conflict.incomingIndex + incomingOffset,
-            existingIndex: conflict.existingIndex + existingOffset,
-          })))
-      );
-    }
-  }
-  const conflicts = (await Promise.all(requests)).flat();
-  return conflicts.map((conflict) => ({
+  const result = await postJson<{
+    conflicts: Array<{ incomingIndex: number; existingIndex: number; reason: string; confidence: number }>;
+  }>("/api/ebook/validate-claims", { incoming, existing });
+  return result.conflicts.map((conflict) => ({
     ...conflict,
     incoming: incoming[conflict.incomingIndex]?.claim ?? "",
     prior: existing[conflict.existingIndex],
   })).filter((conflict) => conflict.incoming && conflict.prior);
 }
 
-function removeConfirmedDuplicateParagraphs(body: string, conflictingClaims: string[]) {
-  const normalizedConflicts = conflictingClaims
-    .map((claim) => claim.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim())
-    .filter(Boolean);
-  let removedCount = 0;
-  const paragraphs = body.split(/\n{2,}/).filter((paragraph) => paragraph.trim().length > 0);
-  const retained = paragraphs.filter((paragraph) => {
-    const candidates = extractClaimCandidates(paragraph).map((candidate) => candidate.claim);
-    const normalizedCandidates = candidates.map((claim) =>
-      claim.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim()
-    );
-    const matches = conflictingClaims.some((conflict, conflictIndex) =>
-      candidates.some((candidate, candidateIndex) =>
-        claimSimilarity(candidate, conflict) >= 0.62 ||
-        normalizedCandidates[candidateIndex] === normalizedConflicts[conflictIndex]
-      )
-    );
-    if (matches) removedCount += 1;
-    return !matches;
-  });
-  return { body: retained.join("\n\n"), removedCount };
-}
-
-function persistedClaimLedger(claims: ClaimRecord[]) {
-  return claims.map((claim) => ({
-    claim: claim.claim,
-    excerptNumbers: claim.excerptNumbers ?? [],
-  }));
-}
-
 function countWords(text: string): number {
   return text.trim().split(/\s+/).filter(Boolean).length;
+}
+
+/** Adapter: Convert UnifiedContentMap to legacy ContentMap format for backward compatibility */
+function adaptUnifiedContentMap(unified: UnifiedContentMap): ContentMap {
+  // Extract all quotes from segments
+  const allQuotes = unified.segments.flatMap(seg => seg.quotes || []);
+  
+  // Convert unified segments to legacy format with sourceAudio field
+  const segments = unified.segments.map((seg, idx) => ({
+    id: seg.id,
+    sourceAudio: "audio-1" as const, // Default to audio-1 since unified doesn't track this
+    topic: seg.topic,
+    rawText: "", // Unified content map doesn't store raw text (optimization)
+    keyPoints: seg.keyPoints,
+    quotes: seg.quotes,
+    estimatedWordCount: seg.estimatedWordCount,
+  }));
+
+  return {
+    totalEstimatedWords: unified.totalEstimatedWords,
+    overarchingThemes: unified.overarchingThemes,
+    teachingArc: unified.teachingArc,
+    coreThesis: unified.coreThesis,
+    targetAudience: unified.targetAudience,
+    uniqueVocabulary: unified.uniqueVocabulary,
+    toneMap: unified.toneMap,
+    segments,
+    allQuotes,
+  };
+}
+
+/** Fetch content map using either unified (optimized) or legacy (slot-based) approach */
+async function fetchContentMap(
+  masterTranscript: string,
+  voiceDNA: VoiceDNA | null
+): Promise<ContentMap> {
+  // Check environment variable for feature flag
+  const useUnified = typeof window !== "undefined" && 
+    document.documentElement.dataset.useUnifiedContentMap === "true";
+  
+  if (useUnified) {
+    // NEW: Single unified call (50-70% token savings)
+    const unified = await postJson<UnifiedContentMap>(
+      "/api/ebook/unified-content-map",
+      { filteredTranscript: masterTranscript, voiceDNA }
+    );
+    return adaptUnifiedContentMap(unified);
+  } else {
+    // OLD: Slot-based approach (fallback)
+    return await postJson<ContentMap>(
+      "/api/ebook/content-map",
+      { masterTranscript, voiceDNA }
+    );
+  }
 }
 
 function toIsoOrNow(value: unknown, nowIso: string): string {
@@ -2754,32 +2767,24 @@ export function EbookPipeline({
             "/api/ebook/write-section",
             { assignment: augmentedRegenerationAssignment }
           );
-          let repairedSectionBody = sectionRes.body;
-          let sectionClaims = sectionRes.claimLedger?.length
+          const sectionClaims = sectionRes.claimLedger?.length
             ? sectionRes.claimLedger
             : extractClaimCandidates(sectionRes.body);
           const regenerationConflicts = findClaimConflicts(sectionClaims, regenerationPriorClaims);
           const semanticRegenerationConflicts = await findSemanticClaimConflicts(sectionClaims, regenerationPriorClaims);
           if (regenerationConflicts.length > 0 || semanticRegenerationConflicts.length > 0) {
-            const repaired = removeConfirmedDuplicateParagraphs(
-              sectionRes.body,
-              [...regenerationConflicts, ...semanticRegenerationConflicts].map((conflict) => conflict.incoming)
-            );
-            repairedSectionBody = repaired.removedCount > 0 ? repaired.body : "";
-            sectionClaims = extractClaimCandidates(repairedSectionBody);
-            addLog(
-              repaired.removedCount > 0
-                ? `    ↳ Removed ${repaired.removedCount} duplicate paragraph(s) during regeneration`
-                : `    ↳ Omitted Section ${assignment.sectionNumber}; its duplicate could not be isolated safely`
+            const conflict = regenerationConflicts[0] ?? semanticRegenerationConflicts[0];
+            throw new Error(
+              `Source regeneration duplicate gate blocked Ch ${chapterNum} §${assignment.sectionNumber}: ${conflict.incoming}`
             );
           }
 
           newSections.push({
             sectionNumber: assignment.sectionNumber,
             heading: assignment.heading,
-            body: repairedSectionBody,
+            body: sectionRes.body,
             quotes: sectionRes.quotes,
-            wordCount: countWords(repairedSectionBody),
+            wordCount: countWords(sectionRes.body),
             claimLedger: sectionClaims,
           });
           regenerationPriorClaims.push(...sectionClaims.map((claim) => ({
@@ -2788,7 +2793,7 @@ export function EbookPipeline({
             sectionNumber: assignment.sectionNumber,
           })));
 
-          addLog(`    ✓ Section ${assignment.sectionNumber} — ${countWords(repairedSectionBody).toLocaleString()} words`);
+          addLog(`    ✓ Section ${assignment.sectionNumber} — ${countWords(sectionRes.body).toLocaleString()} words`);
         }
 
         // Step 7b: Polish the chapter (add intro, takeaways, forward question)
@@ -3202,7 +3207,7 @@ export function EbookPipeline({
       if (!contentMap) {
         setStage("mapping");
         addLog("Mapping content segments…");
-        contentMap = await postJson<ContentMap>("/api/ebook/content-map", { masterTranscript: teachingTranscript, voiceDNA });
+        contentMap = await fetchContentMap(teachingTranscript, voiceDNA);
         addLog(`✓ Content mapped — ${contentMap.segments.length} segments, ${contentMap.allQuotes.length} scriptures/quotes`);
         acc.contentMap = contentMap;
         await checkpoint("architecting");
@@ -3444,7 +3449,6 @@ export function EbookPipeline({
       // Populated at chapter rotation; consumed in the section loop instead of calling write-section.
       const chapterWriteCache = new Map<string, { paragraphs: string[]; claimLedger: Array<{ claim: string }> }>();
       let chapterWrittenForChapter = -1;
-      const sectionWriteContexts = new Map<string, SectionAssignment>();
 
       if (completedCount > 0) {
         addLog(`↩ Resuming — ${completedCount} sections already written, continuing from section ${completedCount + 1}`);
@@ -3748,7 +3752,6 @@ export function EbookPipeline({
           // Chapter-level pre-computed plan — skips per-section planner in write-section
           assignedPlan: chapterPlanMap.get(assignment.sectionNumber),
         };
-        sectionWriteContexts.set(key, augmented);
         addLog(`Writing Ch ${assignment.chapterNumber} § ${assignment.sectionNumber}: ${assignment.heading}…`);
 
         // Update section status to "writing"
@@ -3823,12 +3826,12 @@ export function EbookPipeline({
             sectionNumber: section.sectionNumber,
           }));
         });
-        let claimConflicts = findClaimConflicts(effectiveClaimLedger, priorClaimLedger).filter(
-          (conflict) => conflict.prior.chapterNumber !== assignment.chapterNumber
-        );
-        if (claimConflicts.length > 0) {
-          addLog(`  ↺ ${claimConflicts.length} cross-chapter duplicate claim(s) detected — rewriting section once`);
-          const collisionExclusions = claimConflicts.map((conflict) =>
+        let claimConflicts = findClaimConflicts(effectiveClaimLedger, priorClaimLedger);
+        let semanticClaimConflicts = await findSemanticClaimConflicts(effectiveClaimLedger, priorClaimLedger);
+        if (claimConflicts.length > 0 || semanticClaimConflicts.length > 0) {
+          const totalConflicts = claimConflicts.length + semanticClaimConflicts.length;
+          addLog(`  ↺ ${totalConflicts} duplicate claim(s) detected — rewriting section once`);
+          const collisionExclusions = [...claimConflicts, ...semanticClaimConflicts].map((conflict) =>
             `[Ch ${conflict.prior.chapterNumber} §${conflict.prior.sectionNumber}]: ${conflict.prior.claim}`
           );
           ({ body, claimLedger, passiveVoiceCount, unfullfilledHook, sequenceBreakCount } = await streamSection(
@@ -3839,20 +3842,12 @@ export function EbookPipeline({
             (authorInstructions || targetAudience) ? { instructions: authorInstructions, targetAudience } : undefined
           ));
           effectiveClaimLedger = claimLedger.length > 0 ? claimLedger : extractClaimCandidates(body);
-          claimConflicts = findClaimConflicts(effectiveClaimLedger, priorClaimLedger).filter(
-            (conflict) => conflict.prior.chapterNumber !== assignment.chapterNumber
-          );
-          if (claimConflicts.length > 0) {
-            const repaired = removeConfirmedDuplicateParagraphs(
-              body,
-              claimConflicts.map((conflict) => conflict.incoming)
-            );
-            body = repaired.removedCount > 0 ? repaired.body : "";
-            effectiveClaimLedger = extractClaimCandidates(body);
-            addLog(
-              repaired.removedCount > 0
-                ? `  ↳ Removed ${repaired.removedCount} unresolved duplicate paragraph(s); continuing pipeline`
-                : `  ↳ Omitted §${assignment.sectionNumber} because its unresolved duplicate could not be isolated safely`
+          claimConflicts = findClaimConflicts(effectiveClaimLedger, priorClaimLedger);
+          semanticClaimConflicts = await findSemanticClaimConflicts(effectiveClaimLedger, priorClaimLedger);
+          if (claimConflicts.length > 0 || semanticClaimConflicts.length > 0) {
+            const conflict = claimConflicts[0] ?? semanticClaimConflicts[0];
+            throw new Error(
+              `Duplicate idea gate blocked Ch ${assignment.chapterNumber} §${assignment.sectionNumber}: ${conflict.incoming}`
             );
           }
         }
@@ -3864,7 +3859,7 @@ export function EbookPipeline({
           heading: assignment.heading,
           body,
           wordCount: finalWc,
-          claimLedger: persistedClaimLedger(effectiveClaimLedger),
+          claimLedger: effectiveClaimLedger,
           status: "complete",
         };
         allSections.push(draft);
@@ -3924,156 +3919,8 @@ export function EbookPipeline({
               : ch
           )
         );
-
-        if (isLastSectionInChapter) {
-          const chapterSections = allSections.filter(
-            (section) => section.chapterNumber === assignment.chapterNumber
-          );
-          const priorChapterClaims = allSections
-            .filter((section) => section.chapterNumber !== assignment.chapterNumber)
-            .flatMap((section) => {
-              const claims = section.claimLedger?.length
-                ? section.claimLedger
-                : extractClaimCandidates(section.body ?? "");
-              return claims.map((claim) => ({
-                ...claim,
-                chapterNumber: section.chapterNumber,
-                sectionNumber: section.sectionNumber,
-              }));
-            });
-          const chapterClaimEntries = chapterSections.flatMap((section) => {
-            const claims = section.claimLedger?.length
-              ? section.claimLedger
-              : extractClaimCandidates(section.body ?? "");
-            return claims.map((claim) => ({ ...claim, sectionNumber: section.sectionNumber }));
-          });
-
-          if (chapterClaimEntries.length > 0 && priorChapterClaims.length > 0) {
-            addLog(`  ◇ Validating Chapter ${assignment.chapterNumber} claims against prior chapters…`);
-            const semanticConflicts = await findSemanticClaimConflicts(chapterClaimEntries, priorChapterClaims);
-            const conflictsBySection = new Map<number, typeof semanticConflicts>();
-            for (const conflict of semanticConflicts) {
-              const sectionNumber = chapterClaimEntries[conflict.incomingIndex]?.sectionNumber;
-              if (!sectionNumber) continue;
-              const sectionConflicts = conflictsBySection.get(sectionNumber) ?? [];
-              sectionConflicts.push(conflict);
-              conflictsBySection.set(sectionNumber, sectionConflicts);
-            }
-
-            for (const [sectionNumber, sectionConflicts] of conflictsBySection) {
-              const context = sectionWriteContexts.get(`${assignment.chapterNumber}-${sectionNumber}`);
-              if (!context) continue;
-              addLog(`  ↺ ${sectionConflicts.length} semantic duplicate(s) in §${sectionNumber} — rewriting that section once`);
-              const collisionExclusions = sectionConflicts.map((conflict) =>
-                `[Ch ${conflict.prior.chapterNumber} §${conflict.prior.sectionNumber}]: ${conflict.prior.claim}`
-              );
-              const rewritten = await streamSection(
-                {
-                  ...context,
-                  alreadyCoveredPoints: [...context.alreadyCoveredPoints, ...collisionExclusions],
-                },
-                (authorInstructions || targetAudience) ? { instructions: authorInstructions, targetAudience } : undefined
-              );
-              const sectionIndex = allSections.findIndex(
-                (section) => section.chapterNumber === assignment.chapterNumber && section.sectionNumber === sectionNumber
-              );
-              if (sectionIndex < 0) continue;
-              const rewrittenDraft: SectionDraft = {
-                ...allSections[sectionIndex],
-                body: rewritten.body,
-                wordCount: countWords(rewritten.body),
-                claimLedger: rewritten.claimLedger.length > 0
-                  ? rewritten.claimLedger
-                  : persistedClaimLedger(extractClaimCandidates(rewritten.body)),
-              };
-              allSections[sectionIndex] = rewrittenDraft;
-              setChapters((prev) => prev.map((chapter) =>
-                chapter.number === assignment.chapterNumber
-                  ? {
-                      ...chapter,
-                      sections: chapter.sections.map((section) =>
-                        section.sectionNumber === sectionNumber ? rewrittenDraft : section
-                      ),
-                    }
-                  : chapter
-              ));
-            }
-
-            if (conflictsBySection.size > 0) {
-              const rewrittenChapterClaims = allSections
-                .filter((section) => section.chapterNumber === assignment.chapterNumber)
-                .flatMap((section) => {
-                  const claims = section.claimLedger?.length
-                    ? section.claimLedger
-                    : extractClaimCandidates(section.body ?? "");
-                  return claims.map((claim) => ({ ...claim, sectionNumber: section.sectionNumber }));
-                });
-              const remainingConflicts = await findSemanticClaimConflicts(rewrittenChapterClaims, priorChapterClaims);
-              if (remainingConflicts.length > 0) {
-                const confirmedClaimsBySection = new Map<number, string[]>();
-                for (const conflict of remainingConflicts) {
-                  const incoming = rewrittenChapterClaims[conflict.incomingIndex];
-                  if (!incoming?.sectionNumber) continue;
-                  const claims = confirmedClaimsBySection.get(incoming.sectionNumber) ?? [];
-                  claims.push(incoming.claim);
-                  confirmedClaimsBySection.set(incoming.sectionNumber, claims);
-                }
-
-                for (const [sectionNumber, confirmedClaims] of confirmedClaimsBySection) {
-                  const sectionIndex = allSections.findIndex(
-                    (section) => section.chapterNumber === assignment.chapterNumber && section.sectionNumber === sectionNumber
-                  );
-                  if (sectionIndex < 0) continue;
-                  const repaired = removeConfirmedDuplicateParagraphs(
-                    allSections[sectionIndex].body ?? "",
-                    confirmedClaims
-                  );
-                  const repairedBody = repaired.removedCount > 0 ? repaired.body : "";
-                  const repairedDraft: SectionDraft = {
-                    ...allSections[sectionIndex],
-                    body: repairedBody,
-                    wordCount: countWords(repairedBody),
-                    claimLedger: persistedClaimLedger(extractClaimCandidates(repairedBody)),
-                  };
-                  allSections[sectionIndex] = repairedDraft;
-                  setChapters((prev) => prev.map((chapter) =>
-                    chapter.number === assignment.chapterNumber
-                      ? {
-                          ...chapter,
-                          sections: chapter.sections.map((section) =>
-                            section.sectionNumber === sectionNumber ? repairedDraft : section
-                          ),
-                        }
-                      : chapter
-                  ));
-                  addLog(
-                    repaired.removedCount > 0
-                      ? `  ↳ Removed ${repaired.removedCount} confirmed duplicate paragraph(s) from §${sectionNumber}`
-                      : `  ↳ Omitted §${sectionNumber} because its semantic duplicate could not be isolated safely`
-                  );
-                }
-              }
-
-              currentChapterProse = allSections
-                .filter((section) => section.chapterNumber === assignment.chapterNumber)
-                .map((section) => section.body ?? "")
-                .join("\n\n");
-              previousEnding = getLastSentence(currentChapterProse);
-              writtenCorpus = allSections.map((section) => section.body ?? "").join("\n\n");
-              usedIllustrations.clear();
-              for (const section of allSections) {
-                for (const label of extractIllustrationLabels(section.body ?? "")) usedIllustrations.add(label);
-              }
-              addLog(`  ✓ Chapter ${assignment.chapterNumber} semantic ownership verified`);
-            }
-          }
-        }
-
         setProgress({ total: totalSections, completed: completedCount });
-        const completedDraft = allSections.find(
-          (section) => section.chapterNumber === assignment.chapterNumber && section.sectionNumber === assignment.sectionNumber
-        );
-        addLog(`  ✓ ${(completedDraft?.wordCount ?? finalWc).toLocaleString()} words written`);
+        addLog(`  ✓ ${finalWc.toLocaleString()} words written`);
         // Save after every section so a refresh never loses completed work
         acc.sections = [...allSections];
         acc.progress = { total: totalSections, completed: completedCount };
@@ -4246,7 +4093,7 @@ export function EbookPipeline({
       setQualityReport(quality);
       const duplicateErrors = quality.issues.filter((issue) => issue.code === "DUPLICATE_IDEA" && issue.severity === "error");
       if (duplicateErrors.length > 0) {
-        addLog(`⚠ Draft completed with ${duplicateErrors.length} duplicate idea warning(s); export remains blocked until they are resolved.`);
+        throw new Error(`Duplicate idea gate blocked completion: ${duplicateErrors.length} unresolved duplicate claim(s).`);
       }
       if (quality.pass) {
         addLog(`✓ Quality score: ${quality.score}/100`);
@@ -4278,19 +4125,10 @@ export function EbookPipeline({
       acc.errorLog = logRef.current;
       acc.updatedAt = new Date().toISOString();
       const persistableFailure = sanitizeJobStateForPersistence({ ...acc });
-      // Failure recovery must not depend on an asynchronous IndexedDB write.
-      // Persist both the job pointer and full checkpoint synchronously first,
-      // which is especially important when mobile Safari suspends the page.
-      try {
-        localStorage.setItem(JOB_STORAGE_KEY, persistableFailure.jobId);
-        localStorage.setItem(JOB_STATE_KEY, JSON.stringify(persistableFailure));
-      } catch (storageErr) {
-        addLog(`⚠ Failure checkpoint localStorage save failed: ${storageErr instanceof Error ? storageErr.message : "quota exceeded"}`);
-      }
       try { 
         await saveEbookJob({ ...persistableFailure }); 
-      } catch (storageErr) {
-        addLog(`⚠ Failure checkpoint IndexedDB save failed: ${storageErr instanceof Error ? storageErr.message : "unknown error"}`);
+      } catch (err) {
+        addLog(`⚠ Front matter save failed: ${err instanceof Error ? err.message : 'unknown error'}`);
       }
       // Update savedJobRef so the Resume button has the partial state
       savedJobRef.current = { ...persistableFailure };

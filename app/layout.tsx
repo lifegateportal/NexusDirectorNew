@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { AudioPlayerProvider } from "@/lib/audio-player-context";
 import { GlobalMiniPlayer } from "@/app/components/GlobalMiniPlayer";
+import { env } from "@/lib/env";
 
 export const metadata: Metadata = {
   title: "Nexus Director — Autonomous Software Factory",
@@ -22,7 +23,11 @@ type RootLayoutProps = {
 
 export default function RootLayout({ children }: RootLayoutProps) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html 
+      lang="en" 
+      suppressHydrationWarning
+      data-use-unified-content-map={env.USE_UNIFIED_CONTENT_MAP ? "true" : "false"}
+    >
       <body className="min-h-dvh bg-[#02040d] text-slate-100 antialiased">
         <AudioPlayerProvider>
           {children}

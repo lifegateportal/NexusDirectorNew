@@ -1038,9 +1038,11 @@ function MonitorPageInner() {
   );
 }
 
+export const dynamic = 'force-dynamic';
+
 export default function MonitorPage() {
   return (
-    <Suspense>
+    <Suspense fallback={<div className="flex h-dvh items-center justify-center bg-black text-slate-400">Loading monitor...</div>}>
       <MonitorPageInner />
     </Suspense>
   );

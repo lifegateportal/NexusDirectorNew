@@ -71,6 +71,36 @@ export const ContentMapSchema = z.object({
   allQuotes: z.array(QuoteSchema).default([]), // full quote/scripture registry
 });
 
+// ─── Unified Content Map (Optimized - Single API Call) ────────────────────────
+
+export const UnifiedContentSegmentSchema = z.object({
+  id: z.string(),
+  topic: z.string(),
+  keyPoints: z.array(z.string()).default([]),
+  quotes: z.array(QuoteSchema).default([]),
+  estimatedWordCount: z.number(),
+  narrativePosition: z.enum(["opening", "development", "climax", "resolution"]).default("development"),
+  storyLabels: z.array(z.string()).default([]),
+  scriptureReferences: z.array(z.string()).default([]),
+});
+
+export const UnifiedContentMapSchema = z.object({
+  segments: z.array(UnifiedContentSegmentSchema),
+  totalEstimatedWords: z.number(),
+  overarchingThemes: z.array(z.string()).default([]),
+  teachingArc: z.string().default(""),
+  coreThesis: z.string().default(""),
+  targetAudience: z.string().default(""),
+  uniqueVocabulary: z.array(z.string()).default([]),
+  toneMap: z.string().default(""),
+  storyInventory: z.array(z.object({
+    label: z.string(),
+    segmentId: z.string(),
+  })).default([]),
+});
+
+export type UnifiedContentMap = z.infer<typeof UnifiedContentMapSchema>;
+
 // ─── Section Blueprint (from architect) ──────────────────────────────────────
 
 export const SectionBlueprintSchema = z.object({

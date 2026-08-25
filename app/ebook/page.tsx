@@ -49,6 +49,8 @@ function hasResumableProgress(job: EbookJobState | null): boolean {
 
 type Tab = "pipeline" | "projects" | "manuscript";
 
+export const dynamic = 'force-dynamic';
+
 export default function EbookPage() {
   return (
     <Suspense fallback={(
