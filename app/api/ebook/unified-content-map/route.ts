@@ -199,16 +199,16 @@ Focus on teaching segments, narrative arc, story inventory, and scripture positi
         (seg) => seg.rawText.trim().split(/\s+/).filter(Boolean).length < 160
       );
 
-      // Strict quality gate: prevent tiny/truncated segment payloads from entering
-      // downstream planning/writing. This avoids underwritten manuscripts.
+      // Diagnostic-only quality checks: log low coverage, but do not abort the
+      // full pipeline run for simple projects.
       if (segmentWordTotal < Math.round(transcriptWordCount * 0.58)) {
-        throw new Error(
-          `Unified content map coverage too low (${segmentWordTotal}/${transcriptWordCount} words preserved in segment excerpts). Regenerate with full-length contiguous rawText excerpts.`
+        console.warn(
+          `[unified-content-map] Coverage warning: ${segmentWordTotal}/${transcriptWordCount} transcript words preserved in segment excerpts.`
         );
       }
       if (shortSegments.length > Math.floor(normalizedSegments.length * 0.4)) {
-        throw new Error(
-          `Too many short segment excerpts (${shortSegments.length}/${normalizedSegments.length}). Regenerate with larger rawText excerpts per segment.`
+        console.warn(
+          `[unified-content-map] Segment-length warning: ${shortSegments.length}/${normalizedSegments.length} segments are shorter than 160 words.`
         );
       }
 
