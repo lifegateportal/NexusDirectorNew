@@ -632,7 +632,7 @@ function EbookPageClient() {
 
   const handlePublish = useCallback(async (project: EbookProject): Promise<string | null> => {
     const job = project.jobState;
-    if (!job.architecture || !job.frontMatter || !job.chapters?.length) {
+    if (!job.architecture || !job.chapters?.length) {
       setStatusMsg({ type: "error", text: "Book must be complete before publishing." });
       return null;
     }
@@ -641,7 +641,14 @@ function EbookPageClient() {
       bookTitle:     job.architecture.bookTitle,
       subtitle:      job.architecture.subtitle,
       authorName:    job.architecture.authorName,
-      frontMatter:   job.frontMatter,
+      frontMatter:   job.frontMatter ?? {
+        preface: "",
+        introduction: "",
+        conclusion: "",
+        aboutAuthor: null,
+        resourcesList: [],
+        scriptureIndex: [],
+      },
       chapters:      job.chapters,
       totalWordCount: job.chapters.reduce((s, c) => s + (c.totalWordCount ?? 0), 0),
       allQuotes:     job.contentMap?.allQuotes ?? [],
