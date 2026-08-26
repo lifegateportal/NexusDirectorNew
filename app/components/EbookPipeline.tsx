@@ -256,17 +256,12 @@ function toIsoOrNow(value: unknown, nowIso: string): string {
 
 function sanitizeJobStateForPersistence(input: EbookJobState): EbookJobState {
   const nowIso = new Date().toISOString();
-  const seen = new WeakSet<object>();
 
   let plain: unknown;
   try {
     plain = JSON.parse(JSON.stringify(input, (_key, value: unknown) => {
       if (typeof value === "function") return undefined;
       if (typeof value === "bigint") return Number(value);
-      if (value && typeof value === "object") {
-        if (seen.has(value as object)) return undefined;
-        seen.add(value as object);
-      }
       return value;
     }));
   } catch {
@@ -4117,7 +4112,7 @@ export function EbookPipeline({
       setQualityReport(quality);
       const duplicateErrors = quality.issues.filter((issue) => issue.code === "DUPLICATE_IDEA" && issue.severity === "error");
       if (duplicateErrors.length > 0) {
-        throw new Error(`Duplicate idea gate blocked completion: ${duplicateErrors.length} unresolved duplicate claim(s).`);
+        addLog(`⚠ Duplicate idea review: ${duplicateErrors.length} unresolved duplicate claim(s). Draft remains available for review.`);
       }
       if (quality.pass) {
         addLog(`✓ Quality score: ${quality.score}/100`);
@@ -4138,6 +4133,7 @@ export function EbookPipeline({
 
     } catch (err) {
       const msg = err instanceof Error && err.message.trim() ? err.message : "Pipeline failed";
+      const failedAtStage = acc.currentStage || stage;
       // Log full stack to browser console for debugging
       console.error("[EbookPipeline] runPipeline crash:", err);
       const stackHint = err instanceof Error && err.stack
@@ -4145,7 +4141,7 @@ export function EbookPipeline({
         : "";
       setError(msg + stackHint);
       acc.status = "failed";
-      acc.currentStage = "failed";
+      acc.currentStage = failedAtStage;
       acc.errorLog = logRef.current;
       acc.updatedAt = new Date().toISOString();
       const persistableFailure = sanitizeJobStateForPersistence({ ...acc });
