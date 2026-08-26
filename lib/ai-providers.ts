@@ -31,6 +31,7 @@ const safeDeepSeekModelId = env.DEEPSEEK_MODEL === "deepseek-reasoner"
   ? "deepseek-v4-pro"
   : env.DEEPSEEK_MODEL;
 export const deepSeekModel = deepSeek(safeDeepSeekModelId);
+export const deepSeekChatModel = deepSeek("deepseek-chat");
 export const deepSeekFlashModel = deepSeek("deepseek-v4-flash");
 export const deepSeekReasonerModel = deepSeek("deepseek-reasoner");
 export const claudeModel = anthropic(env.CLAUDE_MODEL);

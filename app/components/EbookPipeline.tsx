@@ -4196,50 +4196,6 @@ export function EbookPipeline({
     ))
   );
 
-  const resumeSnapshot: EbookJobState | null = hasResumableState
-    ? (savedJobRef.current ?? sanitizeJobStateForPersistence({
-        jobId: jobIdRef.current,
-        status: stage,
-        audioFileNames: (audioFiles ?? []).map((f) => f?.name ?? ""),
-        transcripts: sourceTranscripts,
-        masterTranscript: "",
-        filteredTranscript: "",
-        filterRemovedCount: 0,
-        voiceDNA: null,
-        contentMap: null,
-        architecture: null,
-        sectionAssignments,
-        sections: chapters.flatMap((ch) => ch.sections),
-        chapters,
-        frontMatter: null,
-        backMatter: null,
-        exportUrls: null,
-        currentStage: stage,
-        progress,
-        errorLog: logRef.current,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      }))
-    : null;
-
-  const resumeButtonLabel = (() => {
-    const saved = resumeSnapshot;
-    if (!saved) return "Resume pipeline";
-    if ((saved.progress?.completed ?? 0) > 0 && (saved.sectionAssignments?.length ?? 0) > 0) {
-      return `Resume — continue writing (${saved.progress.completed} / ${saved.sectionAssignments.length} sections done)`;
-    }
-    if (saved.chapters.length > 0 || saved.sections.length > 0) {
-      return "Resume — continue from writing checkpoint";
-    }
-    if (!saved.voiceDNA) return "Resume — retry from Voice DNA";
-    if (!saved.contentMap) return "Resume — retry from Content Map";
-    if (!saved.architecture) return "Resume — retry from Chapter Design";
-    if (saved.sectionAssignments.length === 0) return "Resume — retry from Assign Segments";
-    if (saved.sections.length < (saved.sectionAssignments.length || 1)) return `Resume — continue writing (${saved.sections.length} / ${saved.sectionAssignments.length} sections done)`;
-    if (!saved.frontMatter) return "Resume — retry from Front Matter";
-    return "Resume pipeline";
-  })();
-
   return (
     <div className="flex flex-col gap-5 pb-2 lg:pb-6">
 
@@ -4969,7 +4925,29 @@ export function EbookPipeline({
             <button
               type="button"
               onClick={() => {
-                const saved = resumeSnapshot!;
+                const saved = savedJobRef.current ?? sanitizeJobStateForPersistence({
+                  jobId: jobIdRef.current,
+                  status: stage,
+                  audioFileNames: (audioFiles ?? []).map((f) => f?.name ?? ""),
+                  transcripts: sourceTranscripts,
+                  masterTranscript: savedJobRef.current?.masterTranscript ?? "",
+                  filteredTranscript: savedJobRef.current?.filteredTranscript ?? "",
+                  filterRemovedCount: savedJobRef.current?.filterRemovedCount ?? 0,
+                  voiceDNA: savedJobRef.current?.voiceDNA ?? null,
+                  contentMap: savedJobRef.current?.contentMap ?? null,
+                  architecture: savedJobRef.current?.architecture ?? null,
+                  sectionAssignments,
+                  sections: chapters.flatMap((ch) => ch.sections),
+                  chapters,
+                  frontMatter: savedJobRef.current?.frontMatter ?? null,
+                  backMatter: savedJobRef.current?.backMatter ?? null,
+                  exportUrls: null,
+                  currentStage: stage,
+                  progress,
+                  errorLog: logRef.current,
+                  createdAt: new Date().toISOString(),
+                  updatedAt: new Date().toISOString(),
+                });
                 savedJobRef.current = saved;
                 setError(null);
                 setSignalFilterState(parseSignalFilterLog(saved.errorLog ?? []).state);
@@ -4980,7 +4958,19 @@ export function EbookPipeline({
               }}
               className="w-full min-h-[48px] rounded-xl bg-gradient-to-r from-amber-500/80 to-orange-500/80 text-white font-semibold text-sm active:scale-[0.98] transition-all"
             >
-              {resumeButtonLabel}
+              {(() => {
+                const saved = savedJobRef.current!;
+                if ((saved.progress?.completed ?? 0) > 0 && (saved.sectionAssignments?.length ?? 0) > 0) {
+                  return `Resume — continue writing (${saved.progress.completed} / ${saved.sectionAssignments.length} sections done)`;
+                }
+                if (!saved.voiceDNA) return "Resume — retry from Voice DNA";
+                if (!saved.contentMap) return "Resume — retry from Content Map";
+                if (!saved.architecture) return "Resume — retry from Chapter Design";
+                if (saved.sectionAssignments.length === 0) return "Resume — retry from Assign Segments";
+                if (saved.sections.length < (saved.sectionAssignments.length || 1)) return `Resume — continue writing (${saved.sections.length} / ${saved.sectionAssignments.length} sections done)`;
+                if (!saved.frontMatter) return "Resume — retry from Front Matter";
+                return "Resume pipeline";
+              })()}
             </button>
           )}
           <button
