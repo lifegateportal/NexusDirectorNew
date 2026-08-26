@@ -245,7 +245,9 @@ ${sectionPayload}`;
           schema: WriteChapterOutputSchema,
           mode: "json",
           maxTokens: 24_000, // Sufficient for 3-5 sections at 800-1200 words each
-          temperature: 0.7, // Match write-section's expansive temperature
+          // Single-pass chapter writing benefits from tighter variance so all
+          // sections stay refined, coherent, and stylistically consistent.
+          temperature: 0.5,
           system,
           prompt,
         });

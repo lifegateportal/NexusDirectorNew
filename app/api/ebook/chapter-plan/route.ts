@@ -187,6 +187,12 @@ Return a sectionPlans array with one entry per section. Each paragraphPlan entry
 - supportedExcerptNumbers: the 1-based excerpt number(s) within THIS section's excerpt list
 - minExcerptNumber: the lowest excerpt number this paragraph draws from
 
+PURPOSE QUALITY RULES (single-pass critical):
+- Every purpose must name a concrete claim, tension, or distinction from the excerpt(s). Avoid generic purposes.
+- Do NOT write vague lines such as "Introduce the section", "Explain the point", "Provide application", or "Conclude the thought".
+- Reference only THIS section's heading and excerpt evidence; never pre-plan content owned by neighboring sections.
+- When possible, encode progression words in purpose statements (e.g., "define", "contrast", "ground in scripture", "apply", "seal").
+
 ${excerptPayload}`;
 
   // ── Stream heartbeat bytes to keep the reverse-proxy read-timeout alive ──────
@@ -200,7 +206,7 @@ ${excerptPayload}`;
     model: deepSeekModel,
     schema: ChapterPlanLLMSchema,
     mode: "json",
-    temperature: 0.3,
+    temperature: 0.2,
     system,
     prompt,
   });
