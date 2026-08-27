@@ -26,7 +26,6 @@ import type {
   BackMatter,
   EbookJobState,
   EbookManifest,
-  UnifiedContentMap,
 } from "@/lib/schemas/ebook";
 import { SectionAssignmentSchema, EbookJobStateSchema } from "@/lib/schemas/ebook";
 import {
@@ -232,40 +231,15 @@ function countWords(text: string): number {
   return text.trim().split(/\s+/).filter(Boolean).length;
 }
 
-function adaptUnifiedContentMap(unified: UnifiedContentMap): ContentMap {
-  return {
-    totalEstimatedWords: unified.totalEstimatedWords,
-    overarchingThemes: unified.overarchingThemes,
-    teachingArc: unified.teachingArc,
-    coreThesis: unified.coreThesis,
-    targetAudience: unified.targetAudience,
-    uniqueVocabulary: unified.uniqueVocabulary,
-    toneMap: unified.toneMap,
-    segments: unified.segments.map((segment) => ({
-      id: segment.id,
-      sourceAudio: segment.sourceAudio,
-      topic: segment.topic,
-      rawText: segment.rawText,
-      keyPoints: segment.keyPoints,
-      quotes: segment.quotes,
-      estimatedWordCount: segment.estimatedWordCount,
-    })),
-    allQuotes: unified.segments.flatMap((segment) => segment.quotes),
-  };
-}
-
 async function fetchContentMap(
   masterTranscript: string,
   voiceDNA: VoiceDNA | null
 ): Promise<ContentMap> {
-  const unified = await postJson<UnifiedContentMap | { error: string; details?: string }>(
-    "/api/ebook/unified-content-map",
-    { filteredTranscript: masterTranscript, voiceDNA }
+  if (!voiceDNA) throw new Error("Voice DNA is required before content mapping");
+  return postJson<ContentMap>(
+    "/api/ebook/content-map",
+    { masterTranscript, voiceDNA }
   );
-  if ("error" in unified) {
-    throw new Error(unified.details ? `${unified.error}: ${unified.details}` : unified.error);
-  }
-  return adaptUnifiedContentMap(unified);
 }
 
 function toIsoOrNow(value: unknown, nowIso: string): string {

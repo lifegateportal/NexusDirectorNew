@@ -33,6 +33,31 @@ const SlotSegmentsSchema = z.object({
   segments: z.array(SlotSegmentExtractSchema),
 });
 
+async function extractSlotSegments(sourceAudio: string, text: string) {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const { object } = await generateObject({
+        model: deepSeekModel,
+        schema: SlotSegmentsSchema,
+        mode: "json",
+        temperature: 0.2,
+        maxTokens: 8000,
+        system: SEGMENT_SYSTEM,
+        prompt: `Extract all teaching segments from this recording (${sourceAudio}):\n\n${text}`,
+      });
+      if (object.segments.length === 0) {
+        throw new Error(`No segments returned for ${sourceAudio}`);
+      }
+      return object.segments;
+    } catch (error) {
+      lastError = error;
+      console.warn(`[content-map] ${sourceAudio} extraction attempt ${attempt} failed:`, error);
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(`Segment extraction failed for ${sourceAudio}`);
+}
+
 // Final synthesis schema (receives only topics/themes, no raw text)
 const SynthesisSchema = z.object({
   totalEstimatedWords: z.number(),
@@ -111,8 +136,6 @@ export async function POST(req: NextRequest) {
     const parts = input.masterTranscript.split(/═{3,}/);
     let nextSlotFallback = 1; // used when [Slot-N] header was stripped by filter-signal
     for (const part of parts) {
-      // A1: Skip slots tagged as non-teaching by the signal filter (tagNonTeachingSlots pass)
-      if (/^\s*\[NON-TEACHING-SLOT-\d+\]/i.test(part)) continue;
       const m = part.match(/^\s*\[Slot-(\d+)\]\s*([\s\S]+)/);
       if (!m) {
         // The [Slot-1] label may have been removed by the signal filter when it
@@ -160,17 +183,9 @@ export async function POST(req: NextRequest) {
 
           // Process all chunk ranges within this slot in parallel too.
           const chunkSegments = await Promise.all(
-            chunkRanges.map(async (range) => {
+            chunkRanges.map((range) => {
               const chunkText = slotWords.slice(range.start, range.end).join(" ");
-              const { object } = await generateObject({
-                model: deepSeekModel,
-                schema: SlotSegmentsSchema,
-                mode: "json",
-                temperature: 0.2,
-                system: SEGMENT_SYSTEM,
-                prompt: `Extract all teaching segments from this recording (${chunk.sourceAudio}):\n\n${chunkText}`,
-              });
-              return object.segments;
+              return extractSlotSegments(chunk.sourceAudio, chunkText);
             })
           );
 
@@ -187,8 +202,8 @@ export async function POST(req: NextRequest) {
 
           return { chunk, slotWords, dedupedSegs };
         } catch (slotErr) {
-          console.error(`[content-map] Slot ${chunk.sourceAudio} failed — returning empty segments:`, slotErr);
-          return { chunk, slotWords: chunk.text.split(/\s+/), dedupedSegs: [] };
+          console.error(`[content-map] Slot ${chunk.sourceAudio} failed:`, slotErr);
+          throw slotErr;
         }
       })
     );
@@ -246,21 +261,27 @@ export async function POST(req: NextRequest) {
     }
 
     // ── 3. Synthesise themes/arc from segment topics only (no rawText) ──────
-    // Strip any non-teaching segments the LLM flagged before synthesis and export
-    const teachingSegments = allSegments.filter(
-      (s) => !s.topic.includes("[NON-TEACHING") && s.estimatedWordCount > 0
+    // The input has already passed the signal filter. Keep every allocated segment
+    // so no filtered source words disappear between mapping and writing.
+    const teachingSegments = allSegments;
+
+    const sourceWordTotal = slotChunks.reduce(
+      (sum, slot) => sum + slot.text.split(/\s+/).filter(Boolean).length,
+      0
     );
+    const mappedWordTotal = teachingSegments.reduce(
+      (sum, segment) => sum + segment.rawText.split(/\s+/).filter(Boolean).length,
+      0
+    );
+    if (mappedWordTotal !== sourceWordTotal) {
+      throw new Error(`Legacy content map coverage mismatch (${mappedWordTotal}/${sourceWordTotal} words preserved)`);
+    }
 
     const topicSummary = teachingSegments
       .map((s) => `- [${s.sourceAudio}] ${s.topic}: ${s.keyPoints.join("; ")}`)
       .join("\n");
 
-    const { object: synthesis } = await generateObject({
-      model: deepSeekModel,
-      schema: SynthesisSchema,
-      mode: "json",
-      temperature: 0.2,
-      system: `You are a senior editor identifying the overarching message of a multi-part teaching series.
+    const synthesisSystem = `You are a senior editor identifying the overarching message of a multi-part teaching series.
     Base your synthesis ONLY on what the speaker explicitly taught — do not add external theological context.
 
     Your job is to perform the sermon-to-book "Narrative North Star" pass:
@@ -268,13 +289,36 @@ export async function POST(req: NextRequest) {
     - Identify the target audience the speaker is actually addressing in substance, not the live room.
     - Capture the speaker's unique vocabulary, metaphors, and repeated conceptual language.
     - Describe the tone map for the eventual book.
-    - Organize recurring ideas into a coherent flow, treating repeated series recaps or monthly-theme refreshers as support material rather than fresh chapters.`,
-      prompt: `Based on these teaching segment topics, identify the overall themes, teaching arc, core thesis, target audience, unique vocabulary, and tone map.
+    - Organize recurring ideas into a coherent flow, treating repeated series recaps or monthly-theme refreshers as support material rather than fresh chapters.`;
+    const synthesisPrompt = `Based on these teaching segment topics, identify the overall themes, teaching arc, core thesis, target audience, unique vocabulary, and tone map.
 
     Group repeated themes together conceptually so the eventual book reads contiguously instead of repeating sermon-series refreshers.
 
-    ${topicSummary}`,
-    });
+    ${topicSummary}`;
+
+    let synthesis: z.infer<typeof SynthesisSchema> | null = null;
+    let synthesisError: unknown;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const result = await generateObject({
+          model: deepSeekModel,
+          schema: SynthesisSchema,
+          mode: "json",
+          temperature: 0.2,
+          maxTokens: 8000,
+          system: synthesisSystem,
+          prompt: synthesisPrompt,
+        });
+        synthesis = result.object;
+        break;
+      } catch (error) {
+        synthesisError = error;
+        console.warn(`[content-map] Synthesis attempt ${attempt} failed:`, error);
+      }
+    }
+    if (!synthesis) {
+      throw synthesisError instanceof Error ? synthesisError : new Error("Content map synthesis failed");
+    }
 
     const contentMap = {
       ...synthesis,
