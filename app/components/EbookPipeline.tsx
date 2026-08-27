@@ -221,11 +221,29 @@ async function fetchContentMap(
   masterTranscript: string,
   voiceDNA: VoiceDNA | null
 ): Promise<ContentMap> {
-  const unified = await postJson<UnifiedContentMap>(
-    "/api/ebook/unified-content-map",
-    { filteredTranscript: masterTranscript, voiceDNA }
-  );
-  return adaptUnifiedContentMap(unified);
+  try {
+    const unified = await postJson<UnifiedContentMap | { error: string; details?: string }>(
+      "/api/ebook/unified-content-map",
+      { filteredTranscript: masterTranscript, voiceDNA }
+    );
+    if ("error" in unified) {
+      throw new Error(unified.details ? `${unified.error}: ${unified.details}` : unified.error);
+    }
+    return adaptUnifiedContentMap(unified);
+  } catch (unifiedError) {
+    if (!voiceDNA) throw unifiedError;
+    console.warn("[ebook-pipeline] Unified content map failed; using slot-based fallback:", unifiedError);
+    try {
+      return await postJson<ContentMap>(
+        "/api/ebook/content-map",
+        { masterTranscript, voiceDNA }
+      );
+    } catch (fallbackError) {
+      const unifiedMessage = unifiedError instanceof Error ? unifiedError.message : "Unknown unified mapper error";
+      const fallbackMessage = fallbackError instanceof Error ? fallbackError.message : "Unknown fallback mapper error";
+      throw new Error(`Content mapping failed. Unified: ${unifiedMessage}\nFallback: ${fallbackMessage}`);
+    }
+  }
 }
 
 function toIsoOrNow(value: unknown, nowIso: string): string {

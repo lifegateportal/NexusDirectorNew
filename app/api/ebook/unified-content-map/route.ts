@@ -30,6 +30,12 @@ function jsonKeepAlive<T>(work: () => Promise<T>): Response {
       try {
         const payload = await work();
         controller.enqueue(encoder.encode(JSON.stringify(payload)));
+      } catch (error) {
+        console.error("[unified-content-map] Stream failed:", error);
+        controller.enqueue(encoder.encode(JSON.stringify({
+          error: "Failed to generate unified content map",
+          details: error instanceof Error ? error.message : "Unknown error",
+        })));
       } finally {
         clearInterval(keepAlive);
         try { controller.close(); } catch { /* already closed */ }
