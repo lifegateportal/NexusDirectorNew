@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateObject } from "ai";
 import { z } from "zod";
+import { jsonrepair } from "jsonrepair";
 import { deepSeekModel } from "@/lib/ai-providers";
 import { ContentMapRequestSchema, QuoteSchema } from "@/lib/schemas/ebook";
 
@@ -33,29 +34,30 @@ const SlotSegmentsSchema = z.object({
   segments: z.array(SlotSegmentExtractSchema),
 });
 
-async function extractSlotSegments(sourceAudio: string, text: string) {
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    try {
-      const { object } = await generateObject({
-        model: deepSeekModel,
-        schema: SlotSegmentsSchema,
-        mode: "json",
-        temperature: 0.2,
-        maxTokens: 8000,
-        system: SEGMENT_SYSTEM,
-        prompt: `Extract all teaching segments from this recording (${sourceAudio}):\n\n${text}`,
-      });
-      if (object.segments.length === 0) {
-        throw new Error(`No segments returned for ${sourceAudio}`);
-      }
-      return object.segments;
-    } catch (error) {
-      lastError = error;
-      console.warn(`[content-map] ${sourceAudio} extraction attempt ${attempt} failed:`, error);
-    }
+async function repairGeneratedJson({ text }: { text: string }): Promise<string | null> {
+  try {
+    return jsonrepair(text);
+  } catch (error) {
+    console.warn("[content-map] Local JSON repair failed:", error);
+    return null;
   }
-  throw lastError instanceof Error ? lastError : new Error(`Segment extraction failed for ${sourceAudio}`);
+}
+
+async function extractSlotSegments(sourceAudio: string, text: string) {
+  const { object } = await generateObject({
+    model: deepSeekModel,
+    schema: SlotSegmentsSchema,
+    mode: "json",
+    temperature: 0.2,
+    maxTokens: 8000,
+    experimental_repairText: repairGeneratedJson,
+    system: SEGMENT_SYSTEM,
+    prompt: `Extract all teaching segments from this recording (${sourceAudio}):\n\n${text}`,
+  });
+  if (object.segments.length === 0) {
+    throw new Error(`No segments returned for ${sourceAudio}`);
+  }
+  return object.segments;
 }
 
 // Final synthesis schema (receives only topics/themes, no raw text)
@@ -296,29 +298,16 @@ export async function POST(req: NextRequest) {
 
     ${topicSummary}`;
 
-    let synthesis: z.infer<typeof SynthesisSchema> | null = null;
-    let synthesisError: unknown;
-    for (let attempt = 1; attempt <= 2; attempt++) {
-      try {
-        const result = await generateObject({
-          model: deepSeekModel,
-          schema: SynthesisSchema,
-          mode: "json",
-          temperature: 0.2,
-          maxTokens: 8000,
-          system: synthesisSystem,
-          prompt: synthesisPrompt,
-        });
-        synthesis = result.object;
-        break;
-      } catch (error) {
-        synthesisError = error;
-        console.warn(`[content-map] Synthesis attempt ${attempt} failed:`, error);
-      }
-    }
-    if (!synthesis) {
-      throw synthesisError instanceof Error ? synthesisError : new Error("Content map synthesis failed");
-    }
+    const { object: synthesis } = await generateObject({
+      model: deepSeekModel,
+      schema: SynthesisSchema,
+      mode: "json",
+      temperature: 0.2,
+      maxTokens: 8000,
+      experimental_repairText: repairGeneratedJson,
+      system: synthesisSystem,
+      prompt: synthesisPrompt,
+    });
 
     const contentMap = {
       ...synthesis,
