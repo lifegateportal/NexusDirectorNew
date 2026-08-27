@@ -167,12 +167,57 @@ You are writing ALL ${sections.length} sections of Chapter ${chapterNumber} in a
 # SYNTHESIS, NOT TRANSCRIPTION
 Extract core insights from the transcript. Reassemble as premium book prose — NOT paraphrased sentences. Every claim must trace to the provided excerpts. Zero fabrication.
 
+# TRANSCRIPT EXHAUSTION — MANDATORY COVERAGE
+• Every numbered excerpt [1], [2], [3]... must be accounted for in your output
+• If an excerpt contains multiple teaching points, stories, or applications — ALL must be extracted and developed
+• Mental coverage checklist: scan each excerpt before finishing — did I use every usable insight?
+• No "sampling" from excerpts — if the speaker made 4 points in an excerpt, write all 4
+• Each KEY POINT must appear as a fully developed argument (2-3 paragraphs minimum), not a single-sentence mention
+• Stories require: setting, tension, resolution — not just "the speaker mentioned X"
+• Scripture exposition requires ALL of: quote → what it says → what it means → how speaker applies it
+• If you cannot cite the supporting excerpt number [N] for a sentence, that sentence is fabricated — delete it
+
+# ANTI-PADDING DISCIPLINE — WRITE LESS, NOT MORE
+• When transcript material thins out, STOP writing rather than invent connective tissue
+• Three brilliant paragraphs beat five mediocre ones where two were padded with invented content
+• BANNED PADDING: plausible extensions, theological fill, inferred background, "what the author probably meant"
+• If you're explaining context the speaker didn't provide, you're fabricating — stop
+• Target word counts are MAXIMUMS based on available content, not quotas to fill with invented prose
+• Thin section material = shorter brilliant output. Never apologize for brevity when faithful to source.
+
 # CONTENT COVERAGE — CRITICAL
 • EXHAUST every distinct key point, story, illustration, and argument from each section's excerpts
 • Meet or exceed the target word count for each section (±15% acceptable)
 • Each section must develop ALL its assigned key points fully — not just mention them
 • Write shorter ONLY to avoid bleeding into the next section/chapter — never to save tokens
 • If you finish a section well under target word count, you missed content from the excerpts
+
+# BESTSELLER PROSE STANDARDS — CRAFT-LEVEL EXECUTION
+OPENING HOOKS:
+• First sentence of each section must create forward momentum — never throat-clear
+• Open with tension, question, vivid image, or provocative claim (drawn from transcript)
+• BANNED OPENINGS: "Let's explore", "It's important to", "We need to understand", "In this section"
+
+NARRATIVE RHYTHM:
+• Vary sentence length deliberately: short punchy beat after long development
+• Three short sentences in a row = monotony. Break the pattern.
+• Long complex sentence followed by fragment or 3-5 word punch = mastery
+
+READER PAYOFF:
+• Every paragraph must deliver insight, revelation, or story advancement — not setup
+• If a paragraph only prepares the reader for the next one, merge them
+• No "bridge paragraphs" that exist only to connect two ideas
+
+VISCERAL LANGUAGE:
+• Replace abstract terms with concrete images when transcript provides them
+• "spiritual growth" < "roots deepening in rocky soil" (if speaker used that image)
+• "divine provision" < "manna appearing at dawn" (if that's the speaker's example)
+• Use the speaker's actual metaphors and images — they chose them for a reason
+
+ZERO FILLER:
+• Delete throat-clearing: "Now", "So", "Well", "You see", "Here's the thing"
+• Delete meta-commentary: "This is crucial", "Pay attention to this", "Notice that"
+• Delete false transitions: "Moving on", "Another point", "Additionally"
 
 # VOICE AND STYLE
 • Active voice, strong verbs, authoritative tone
@@ -190,6 +235,7 @@ Each section is sealed. Do NOT preview the next section's content from within th
 
 # SCRIPTURE RULES
 • Reproduce only the complete verified Scripture text supplied in ASSIGNED QUOTES. Never reconstruct, complete, correct, or paraphrase verse text from memory
+• REMOVE SECTION HEADINGS: Strip any editorial headings or titles that appear in the verified text (e.g., "The Lord Is My Shepherd", "Jesus Heals the Blind Man"). Print only the verse text itself.
 • Short (<40 words): *"verse text"* (Book Chapter:Verse, Translation) inline
 • Long (40+ words): markdown blockquote with no quotation marks; place *Book Chapter:Verse, Translation* on its own final blockquote line with no dash
 • Use a comma before the translation abbreviation in every citation: (Psalm 27:1, NIV), not (Psalm 27:1 NIV)
@@ -227,6 +273,14 @@ Return a JSON object with a "sections" array. Each element:
   sectionNumber: integer matching the §N above
   paragraphs: string[] — each string is one prose paragraph
   claimLedger: { claim: string }[] — one entry per key teaching claim made in this section
+
+EXCERPT ACCOUNTABILITY — SELF-CHECK BEFORE RETURNING:
+Before finalizing each section, verify:
+✓ Every numbered excerpt [1], [2], [3]... has contributed content to the output
+✓ Every key point listed has 2-3 paragraphs of development (not just a mention)
+✓ Every assigned quote appears in the prose with proper formatting
+✓ No paragraph exists that cannot cite its supporting excerpt number
+✓ Word count within ±15% of target (unless transcript material genuinely insufficient)
 
 ────────────────────────────────────────────
 
