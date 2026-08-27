@@ -9,12 +9,6 @@ import { hydrateScriptureQuotes } from "@/lib/scripture-service";
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
-function trimToWordLimit(text: string, maxWords: number): string {
-  const words = text.trim().split(/\s+/);
-  if (words.length <= maxWords) return text.trim();
-  return `${words.slice(0, maxWords).join(" ")} […]`;
-}
-
 export async function POST(req: NextRequest) {
   const body = await req.json() as unknown;
   let input;
@@ -83,6 +77,14 @@ These are actual sentences from prior chapters. Do NOT repeat these stories, exa
 ${priorSectionsSample.slice(0, 20).map((p) => `• ${p.slice(0, 200)}`).join("\n")}`
     : "";
 
+  const coveredPointsBlock = alreadyCoveredPoints.length > 0
+    ? `\n\n════════════════════════════════════════════
+PRIOR CHAPTER CLAIMS — HARD SKIP
+════════════════════════════════════════════
+These claims already belong to earlier chapters. Do not explain, paraphrase, illustrate, or re-teach them. A brief callback is allowed only when required to advance new source material:
+${alreadyCoveredPoints.slice(0, 40).map((point) => `• ${point.slice(0, 300)}`).join("\n")}`
+    : "";
+
   const bannedRecapsBlock = bannedRecaps.length > 0
     ? `\n\n════════════════════════════════════════════
 BANNED RECAP SENTENCES
@@ -117,26 +119,29 @@ These 3-gram constructions are already overused across prior chapters. Avoid the
     const excerptWordCap = 600;    // 2.3x increase for fuller story/teaching development
     const sectionWordCap = 4500;   // 2.8x increase for comprehensive section coverage
     let sectionWordTally = 0;
-    const boundedExcerpts: string[] = [];
-    for (const rawExcerpt of (sec.transcriptExcerpts ?? [])) {
+    const boundedExcerpts: Array<{ sourceNumber: number; part: number; totalParts: number; text: string }> = [];
+    for (const [sourceIndex, rawExcerpt] of (sec.transcriptExcerpts ?? []).entries()) {
       const cleaned = cleanTranscriptForBook(rawExcerpt).trim();
       if (!cleaned) continue;
-      const bounded = trimToWordLimit(cleaned, excerptWordCap);
-      const wc = bounded.split(/\s+/).filter(Boolean).length;
-      if (sectionWordTally >= sectionWordCap) break;
-      if (sectionWordTally + wc > sectionWordCap) {
-        const remaining = Math.max(80, sectionWordCap - sectionWordTally);
-        const tail = trimToWordLimit(bounded, remaining);
-        boundedExcerpts.push(tail);
-        sectionWordTally = sectionWordCap;
-        break;
+      const words = cleaned.split(/\s+/).filter(Boolean);
+      const totalParts = Math.ceil(words.length / excerptWordCap);
+      for (let offset = 0; offset < words.length && sectionWordTally < sectionWordCap; offset += excerptWordCap) {
+        const remaining = sectionWordCap - sectionWordTally;
+        const chunk = words.slice(offset, offset + Math.min(excerptWordCap, remaining));
+        if (chunk.length === 0) break;
+        boundedExcerpts.push({
+          sourceNumber: sourceIndex + 1,
+          part: Math.floor(offset / excerptWordCap) + 1,
+          totalParts,
+          text: chunk.join(" "),
+        });
+        sectionWordTally += chunk.length;
       }
-      boundedExcerpts.push(bounded);
-      sectionWordTally += wc;
+      if (sectionWordTally >= sectionWordCap) break;
     }
 
     const excerpts = boundedExcerpts
-      .map((e, i) => `[${i + 1}] ${e}`)
+      .map((excerpt) => `[${excerpt.sourceNumber} part ${excerpt.part}/${excerpt.totalParts}] ${excerpt.text}`)
       .join("\n\n");
     const planBlock = (sec.assignedPlan ?? []).length > 0
       ? `\nPARAGRAPH PLAN (follow this sequence):\n${sec.assignedPlan!.map((p, i) =>
@@ -153,7 +158,7 @@ These 3-gram constructions are already overused across prior chapters. Avoid the
         ).join("\n")}`
       : "";
     const lastFlag = sec.isLastSectionInChapter ? " [LAST SECTION — hard chapter boundary: do NOT develop the next chapter's themes]" : "";
-    return `══ SECTION ${idx + 1} of ${sections.length}: §${sec.sectionNumber} — "${sec.heading}" (~${sec.targetWordCount ?? 500} words)${lastFlag} ══${keyPointsText}${quotesText}${planBlock}\n\nTRANSCRIPT EXCERPTS:\n${excerpts}`;
+    return `══ SECTION ${idx + 1} of ${sections.length}: §${sec.sectionNumber} — "${sec.heading}" (~${sec.targetWordCount ?? 500} words; ${sectionWordTally} source words supplied)${lastFlag} ══${keyPointsText}${quotesText}${planBlock}\n\nTRANSCRIPT EXCERPTS:\n${excerpts}`;
   }).join("\n\n────────────────────────────────────────────\n\n");
 
   // ── System prompt ──────────────────────────────────────────────────────────
@@ -267,6 +272,7 @@ Each section is sealed. Do NOT preview the next section's content from within th
 • Incomplete or broken sentences that trail off without a point
 • Any sentence beginning with a markdown heading symbol (#, ##, ###)
 ${SOURCE_LOCK_RULES}${voiceDnaBlock}${authorConfigBlock}${priorContextBlock}${bannedRecapsBlock}${quoteDedupBlock}${lexicalBlock}${translationBlock}
+${coveredPointsBlock}
 ${READER_NORMALIZATION_RULES}
 ${PROSE_MASTERY_RULES}
 ${PREMIUM_BOOK_STYLE_RULES}`;

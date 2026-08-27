@@ -160,6 +160,43 @@ async function postJson<T>(url: string, body: unknown, retries = 1): Promise<T> 
   throw new Error(`Request failed after retries: ${route}`);
 }
 
+type ChapterWriteResult = {
+  sections?: Array<{ sectionNumber: number; paragraphs: string[]; claimLedger: Array<{ claim: string }> }>;
+  error?: string;
+  details?: string;
+};
+
+async function postChapterWrite(body: unknown): Promise<ChapterWriteResult> {
+  const response = await fetch("/api/ebook/write-chapter", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const rawText = await response.text();
+  let result: ChapterWriteResult | null = null;
+
+  for (const line of rawText.split("\n")) {
+    if (line.startsWith("data:")) {
+      result = JSON.parse(line.slice(5).trim()) as ChapterWriteResult;
+      break;
+    }
+  }
+  if (!result && rawText.trim()) {
+    try {
+      result = JSON.parse(rawText) as ChapterWriteResult;
+    } catch {
+      // Preserve the raw response in the error below.
+    }
+  }
+  if (!response.ok || !result || result.error) {
+    const responseError = result?.error
+      ? `${result.error}${result.details ? `: ${result.details}` : ""}`
+      : rawText.trim().slice(0, 500) || "Empty response body";
+    throw new Error(`write-chapter failed (${response.status}): ${responseError}`);
+  }
+  return result;
+}
+
 async function streamSection(
   assignment: SectionAssignment,
   authorConfig?: { instructions: string; targetAudience: string }
@@ -221,29 +258,14 @@ async function fetchContentMap(
   masterTranscript: string,
   voiceDNA: VoiceDNA | null
 ): Promise<ContentMap> {
-  try {
-    const unified = await postJson<UnifiedContentMap | { error: string; details?: string }>(
-      "/api/ebook/unified-content-map",
-      { filteredTranscript: masterTranscript, voiceDNA }
-    );
-    if ("error" in unified) {
-      throw new Error(unified.details ? `${unified.error}: ${unified.details}` : unified.error);
-    }
-    return adaptUnifiedContentMap(unified);
-  } catch (unifiedError) {
-    if (!voiceDNA) throw unifiedError;
-    console.warn("[ebook-pipeline] Unified content map failed; using slot-based fallback:", unifiedError);
-    try {
-      return await postJson<ContentMap>(
-        "/api/ebook/content-map",
-        { masterTranscript, voiceDNA }
-      );
-    } catch (fallbackError) {
-      const unifiedMessage = unifiedError instanceof Error ? unifiedError.message : "Unknown unified mapper error";
-      const fallbackMessage = fallbackError instanceof Error ? fallbackError.message : "Unknown fallback mapper error";
-      throw new Error(`Content mapping failed. Unified: ${unifiedMessage}\nFallback: ${fallbackMessage}`);
-    }
+  const unified = await postJson<UnifiedContentMap | { error: string; details?: string }>(
+    "/api/ebook/unified-content-map",
+    { filteredTranscript: masterTranscript, voiceDNA }
+  );
+  if ("error" in unified) {
+    throw new Error(unified.details ? `${unified.error}: ${unified.details}` : unified.error);
   }
+  return adaptUnifiedContentMap(unified);
 }
 
 function toIsoOrNow(value: unknown, nowIso: string): string {
@@ -3603,11 +3625,7 @@ export function EbookPipeline({
             if (chapterAssignmentsForWrite.length > 0) {
               addLog(`  ✍ Writing Chapter ${assignment.chapterNumber} in one pass (${chapterAssignmentsForWrite.length} sections)…`);
               try {
-                // G6: route now returns SSE — read the stream and parse the data: line
-                const chapterWriteRes = await fetch("/api/ebook/write-chapter", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
+                const chapterWriteRequest = {
                     chapterNumber: assignment.chapterNumber,
                     chapterTitle: assignment.chapterTitle,
                     chapterPremise: (architecture.chapters.find((ch) => ch.number === assignment.chapterNumber) as { chapterPremise?: string } | undefined)?.chapterPremise ?? undefined,
@@ -3621,6 +3639,10 @@ export function EbookPipeline({
                     voiceDNA,
                     authorConfig: (authorInstructions || targetAudience) ? { instructions: authorInstructions, targetAudience } : undefined,
                     priorSectionsSample: buildProseSampleForDedup(assignment.chapterNumber),
+                    alreadyCoveredPoints: buildCoverageLedger(
+                      allSections.filter((section) => section.chapterNumber !== assignment.chapterNumber),
+                      assignmentKeyPointsLookup
+                    ).map((entry) => `[${entry.heading}]: ${entry.summary}`),
                     bannedRecaps: extractBannedRecaps(allSections),
                     alreadyQuotedRefs: [...usedQuoteRefs],
                     forbiddenVerseTexts: Array.from(quotedVerseTextsByRef.values()).filter(Boolean),
@@ -3643,43 +3665,44 @@ export function EbookPipeline({
                         assignedPlan: chapterPlanMap.get(a.sectionNumber),
                       };
                     }),
-                  }),
-                });
-                // Read SSE buffer, extract the data: JSON line
-                const reader = chapterWriteRes.body!.getReader();
-                const dec = new TextDecoder();
-                let buf = "";
-                while (true) {
-                  const { done, value } = await reader.read();
-                  if (done) break;
-                  buf += dec.decode(value, { stream: true });
-                }
-                let chapterWriteResult: { sections: Array<{ sectionNumber: number; paragraphs: string[]; claimLedger: Array<{ claim: string }> }>; error?: string } | null = null;
-                for (const line of buf.split("\n")) {
-                  if (line.startsWith("data: ")) {
-                    chapterWriteResult = JSON.parse(line.slice(6));
-                    break;
-                  }
-                }
-                if (!chapterWriteResult || chapterWriteResult.error) throw new Error(chapterWriteResult?.error ?? "Empty response from write-chapter");
+                };
 
-                for (const sec of chapterWriteResult.sections ?? []) {
-                  chapterWriteCache.set(`${assignment.chapterNumber}-${sec.sectionNumber}`, {
-                    paragraphs: sec.paragraphs ?? [],
-                    claimLedger: sec.claimLedger ?? [],
-                  });
-                }
-                const missingSectionNumbers = chapterAssignmentsForWrite
-                  .map((a) => a.sectionNumber)
-                  .filter((sectionNumber) => !chapterWriteCache.has(`${assignment.chapterNumber}-${sectionNumber}`));
-                if (missingSectionNumbers.length > 0) {
+                for (let attempt = 1; attempt <= 2; attempt++) {
+                  let chapterWriteResult: ChapterWriteResult;
+                  try {
+                    chapterWriteResult = await postChapterWrite(chapterWriteRequest);
+                  } catch (requestError) {
+                    if (attempt === 1) {
+                      addLog(`  ↺ Chapter request failed — retrying the same single-pass writer…`);
+                      continue;
+                    }
+                    throw requestError;
+                  }
+                  chapterWriteCache.clear();
+                  for (const sec of chapterWriteResult.sections ?? []) {
+                    chapterWriteCache.set(`${assignment.chapterNumber}-${sec.sectionNumber}`, {
+                      paragraphs: sec.paragraphs ?? [],
+                      claimLedger: sec.claimLedger ?? [],
+                    });
+                  }
+                  const missingSectionNumbers = chapterAssignmentsForWrite
+                    .map((a) => a.sectionNumber)
+                    .filter((sectionNumber) => {
+                      const cached = chapterWriteCache.get(`${assignment.chapterNumber}-${sectionNumber}`);
+                      return !cached || cached.paragraphs.length === 0;
+                    });
+                  if (missingSectionNumbers.length === 0) break;
+                  if (attempt === 1) {
+                    addLog(`  ↺ Chapter response omitted section(s) ${missingSectionNumbers.join(", ")} — retrying the same single-pass writer…`);
+                    continue;
+                  }
                   throw new Error(
-                    `write-chapter returned partial output for Ch ${assignment.chapterNumber}; missing section(s): ${missingSectionNumbers.join(", ")}`
+                    `write-chapter returned no output for Ch ${assignment.chapterNumber} section(s): ${missingSectionNumbers.join(", ")}`
                   );
                 }
                 addLog(`  ✓ Chapter ${assignment.chapterNumber} written (${chapterWriteCache.size} sections cached)`);
               } catch (writeErr) {
-                addLog(`  ✗ Chapter write call failed — single-pass mode requires complete chapter output`);
+                addLog(`  ✗ Chapter writer returned no usable section output after retry`);
                 console.warn("[write-chapter] failed:", writeErr);
                 throw writeErr;
               }
@@ -3799,7 +3822,7 @@ export function EbookPipeline({
         let sequenceBreakCount: number;
         const isStrictBatchSection = useChapterWriter && Boolean(_cached && _cached.paragraphs.length > 0);
         if (useChapterWriter && !isStrictBatchSection) {
-          throw new Error(`Single-pass chapter writer missing cached output for Ch ${assignment.chapterNumber} §${assignment.sectionNumber}`);
+          throw new Error(`Single-pass chapter writer missing output for Ch ${assignment.chapterNumber} §${assignment.sectionNumber}`);
         }
 
         if (_cached && _cached.paragraphs.length > 0) {
@@ -3817,6 +3840,9 @@ export function EbookPipeline({
 
         // Quality gate: retry once if too short (transcript coverage check)
         const wc = countWords(body);
+        if (isStrictBatchSection && wc < 300 && assignment.transcriptExcerpts.join(" ").length > 500) {
+          addLog(`  ⚠ Single-pass section is short (${wc} words) despite substantial source material`);
+        }
         if (!isStrictBatchSection && wc < 300 && assignment.transcriptExcerpts.join(" ").length > 500) {
           addLog(`  ↺ Section too short (${wc} words) — retrying with expansion prompt…`);
           const expanded = { ...augmented, targetWordCount: Math.max(assignment.targetWordCount, 600) };
@@ -3854,6 +3880,9 @@ export function EbookPipeline({
         });
         let claimConflicts = findClaimConflicts(effectiveClaimLedger, priorClaimLedger);
         let semanticClaimConflicts = await findSemanticClaimConflicts(effectiveClaimLedger, priorClaimLedger);
+        if (isStrictBatchSection && (claimConflicts.length > 0 || semanticClaimConflicts.length > 0)) {
+          addLog(`  ⚠ Single-pass section has ${claimConflicts.length + semanticClaimConflicts.length} possible duplicate claim(s) for review`);
+        }
         if (!isStrictBatchSection && (claimConflicts.length > 0 || semanticClaimConflicts.length > 0)) {
           const totalConflicts = claimConflicts.length + semanticClaimConflicts.length;
           addLog(`  ↺ ${totalConflicts} duplicate claim(s) detected — rewriting section once`);
@@ -3949,6 +3978,16 @@ export function EbookPipeline({
         addLog(`  ✓ ${finalWc.toLocaleString()} words written`);
         // Save after every section so a refresh never loses completed work
         acc.sections = [...allSections];
+        acc.chapters = acc.chapters.map((chapter) =>
+          chapter.number === assignment.chapterNumber
+            ? {
+                ...chapter,
+                sections: chapter.sections.map((section) =>
+                  section.sectionNumber === assignment.sectionNumber ? draft : section
+                ),
+              }
+            : chapter
+        );
         acc.progress = { total: totalSections, completed: completedCount };
         await checkpoint("writing");
       }
