@@ -111,10 +111,11 @@ These 3-gram constructions are already overused across prior chapters. Avoid the
 
   // ── Build section payload ──────────────────────────────────────────────────
   const sectionPayload = sections.map((sec, idx) => {
-    // Keep chapter-writer input bounded so structured JSON generation remains stable
-    // on long chapters with dense transcript excerpts.
-    const excerptWordCap = 260;
-    const sectionWordCap = 1600;
+    // Balance rich content delivery with stable JSON generation.
+    // These caps allow exhaustive transcript coverage for teaching books while
+    // preventing context overflow that breaks structured output.
+    const excerptWordCap = 600;    // 2.3x increase for fuller story/teaching development
+    const sectionWordCap = 4500;   // 2.8x increase for comprehensive section coverage
     let sectionWordTally = 0;
     const boundedExcerpts: string[] = [];
     for (const rawExcerpt of (sec.transcriptExcerpts ?? [])) {

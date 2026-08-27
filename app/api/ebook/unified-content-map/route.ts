@@ -73,13 +73,13 @@ YOU MUST NOT:
 SEGMENT EXTRACTION RULES
 ═══════════════════════════════════════════════════════════════════
 - Identify natural topic shifts as segment boundaries
-- Each segment: 300-900 words of teaching material (except truly short final carryover segments)
+- Each segment: 400-1200 words of teaching material (except truly short final carryover segments)
 - Aim for 8-15 segments per recording (fewer for shorter messages, more for long teachings)
 - Skip non-teaching content: prayers, announcements, "turn to your neighbor", altar calls
 - Each segment MUST include rawText: a contiguous VERBATIM excerpt copied from the transcript for that segment
 - rawText must not be summarized, compressed, paraphrased, or clipped to a teaser snippet
 - rawText must not contain "[…]" or ellipsis-based truncation
-- rawText should usually be 220-700 words unless the segment itself is naturally shorter
+- rawText should usually be 400-1200 words for rich teaching segments (fuller content = better downstream writing)
 - Each segment MUST include sourceAudio mapped to the slot marker where that excerpt appears:
   [Slot-1] -> audio-1, [Slot-2] -> audio-2, ... [Slot-10] -> audio-10
 - Do NOT merge content from different slot markers into a single segment.
@@ -179,6 +179,7 @@ Focus on teaching segments, narrative arc, story inventory, and scripture positi
         system: UNIFIED_CONTENT_ANALYST_SYSTEM,
         prompt,
         temperature: 0.3, // Lower temperature for more consistent extraction
+        maxTokens: 16000, // Increased for richer segment extraction with fuller rawText
       });
 
       // Assign sequential IDs to segments if not already set
@@ -199,16 +200,16 @@ Focus on teaching segments, narrative arc, story inventory, and scripture positi
         (seg) => seg.rawText.trim().split(/\s+/).filter(Boolean).length < 160
       );
 
-      // Diagnostic-only quality checks: log low coverage, but do not abort the
-      // full pipeline run for simple projects.
+      // Strict quality gate: prevent tiny/truncated segment payloads from entering
+      // downstream planning/writing. This avoids underwritten manuscripts.
       if (segmentWordTotal < Math.round(transcriptWordCount * 0.58)) {
-        console.warn(
-          `[unified-content-map] Coverage warning: ${segmentWordTotal}/${transcriptWordCount} transcript words preserved in segment excerpts.`
+        throw new Error(
+          `Unified content map coverage too low (${segmentWordTotal}/${transcriptWordCount} words preserved in segment excerpts). Regenerate with full-length contiguous rawText excerpts.`
         );
       }
       if (shortSegments.length > Math.floor(normalizedSegments.length * 0.4)) {
-        console.warn(
-          `[unified-content-map] Segment-length warning: ${shortSegments.length}/${normalizedSegments.length} segments are shorter than 160 words.`
+        throw new Error(
+          `Too many short segment excerpts (${shortSegments.length}/${normalizedSegments.length}). Regenerate with larger rawText excerpts per segment.`
         );
       }
 

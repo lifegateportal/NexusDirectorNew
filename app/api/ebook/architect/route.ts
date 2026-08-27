@@ -248,7 +248,9 @@ async function architectOneChapterFromTranscript(
   teachingArc: string,
   voiceDNATone: string,
 ): Promise<z.infer<typeof SingleChapterPlanSchema>> {
-  const MAX_RAW_WORDS_PER_SEGMENT = 1200;
+  // Increased to allow richer segment context for chapter planning.
+  // Teaching books need fuller transcript excerpts for proper section assignment.
+  const MAX_RAW_WORDS_PER_SEGMENT = 2400;
   const transcriptBlock = segments.map((seg) => {
     const rawWords = (seg.rawText ?? "").split(/\s+/);
     const rawTruncated = rawWords.length > MAX_RAW_WORDS_PER_SEGMENT
