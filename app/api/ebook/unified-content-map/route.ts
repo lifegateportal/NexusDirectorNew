@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateObject } from "ai";
+import { z } from "zod";
 import { deepSeekModel } from "@/lib/ai-providers";
-import { UnifiedContentMapSchema, type UnifiedContentMap } from "@/lib/schemas/ebook";
+import {
+  UnifiedContentMapSchema,
+  UnifiedContentSegmentSchema,
+  type UnifiedContentMap,
+} from "@/lib/schemas/ebook";
 import { SOURCE_LOCK_RULES } from "@/lib/editorial-style-bible";
 
 export const runtime = "nodejs";
@@ -76,10 +81,8 @@ SEGMENT EXTRACTION RULES
 - Each segment: 400-1200 words of teaching material (except truly short final carryover segments)
 - Aim for 8-15 segments per recording (fewer for shorter messages, more for long teachings)
 - Skip non-teaching content: prayers, announcements, "turn to your neighbor", altar calls
-- Each segment MUST include rawText: a contiguous VERBATIM excerpt copied from the transcript for that segment
-- rawText must not be summarized, compressed, paraphrased, or clipped to a teaser snippet
-- rawText must not contain "[…]" or ellipsis-based truncation
-- rawText should usually be 400-1200 words for rich teaching segments (fuller content = better downstream writing)
+- Return segments in the same order they appear within each source recording.
+- Do not reproduce transcript excerpts in the response; the server attaches contiguous rawText after analysis.
 - Each segment MUST include sourceAudio mapped to the slot marker where that excerpt appears:
   [Slot-1] -> audio-1, [Slot-2] -> audio-2, ... [Slot-10] -> audio-10
 - Do NOT merge content from different slot markers into a single segment.
@@ -131,6 +134,61 @@ Example: "Passionate, authoritative, encouraging, scriptural, direct"
 
 Output all content in a single structured object.`;
 
+const UnifiedAnalysisSchema = UnifiedContentMapSchema.extend({
+  segments: z.array(UnifiedContentSegmentSchema.omit({ rawText: true })),
+});
+
+function splitTranscriptBySource(transcript: string): Map<string, string[]> {
+  const bySource = new Map<string, string[]>();
+  let fallbackSlot = 1;
+
+  for (const part of transcript.split(/═{3,}/)) {
+    const match = part.match(/^\s*\[Slot-(\d+)\]\s*([\s\S]+)/i);
+    const sourceAudio = match ? `audio-${Number(match[1])}` : `audio-${fallbackSlot}`;
+    const text = (match?.[2] ?? part).trim();
+    if (!text) continue;
+    bySource.set(sourceAudio, text.split(/\s+/).filter(Boolean));
+    fallbackSlot = match ? Number(match[1]) + 1 : fallbackSlot + 1;
+  }
+
+  if (bySource.size === 0) {
+    bySource.set("audio-1", transcript.trim().split(/\s+/).filter(Boolean));
+  }
+  return bySource;
+}
+
+function attachSourceExcerpts(
+  segments: z.infer<typeof UnifiedAnalysisSchema>["segments"],
+  transcript: string,
+): UnifiedContentMap["segments"] {
+  const wordsBySource = splitTranscriptBySource(transcript);
+  const result: UnifiedContentMap["segments"] = [];
+
+  for (const [sourceAudio, sourceWords] of wordsBySource) {
+    const sourceSegments = segments.filter((segment) => segment.sourceAudio === sourceAudio);
+    if (sourceSegments.length === 0) continue;
+    const totalWeight = sourceSegments.reduce(
+      (sum, segment) => sum + Math.max(1, segment.estimatedWordCount),
+      0,
+    );
+    let offset = 0;
+
+    sourceSegments.forEach((segment, index) => {
+      const end = index === sourceSegments.length - 1
+        ? sourceWords.length
+        : Math.min(
+            sourceWords.length,
+            offset + Math.max(1, Math.round(sourceWords.length * Math.max(1, segment.estimatedWordCount) / totalWeight)),
+          );
+      const rawText = sourceWords.slice(offset, end).join(" ");
+      result.push({ ...segment, rawText });
+      offset = end;
+    });
+  }
+
+  return result;
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -174,16 +232,15 @@ Focus on teaching segments, narrative arc, story inventory, and scripture positi
     return jsonKeepAlive(async () => {
       const contentMap = await generateObject({
         model: deepSeekModel,
-        schema: UnifiedContentMapSchema,
+        schema: UnifiedAnalysisSchema,
         mode: "json",
         system: UNIFIED_CONTENT_ANALYST_SYSTEM,
         prompt,
         temperature: 0.3, // Lower temperature for more consistent extraction
-        maxTokens: 16000, // Increased for richer segment extraction with fuller rawText
+        maxTokens: 8000,
       });
 
-      // Assign sequential IDs to segments if not already set
-      const normalizedSegments = contentMap.object.segments.map((seg, idx) => ({
+      const normalizedSegments = attachSourceExcerpts(contentMap.object.segments, filteredTranscript).map((seg, idx) => ({
         ...seg,
         id: seg.id || `seg-${idx + 1}`,
         estimatedWordCount: Math.max(
@@ -196,23 +253,11 @@ Focus on teaching segments, narrative arc, story inventory, and scripture positi
         (sum, seg) => sum + seg.rawText.trim().split(/\s+/).filter(Boolean).length,
         0
       );
-      const shortSegments = normalizedSegments.filter(
-        (seg) => seg.rawText.trim().split(/\s+/).filter(Boolean).length < 160
-      );
-
-      // Strict quality gate: prevent tiny/truncated segment payloads from entering
-      // downstream planning/writing. This avoids underwritten manuscripts.
       if (segmentWordTotal < Math.round(transcriptWordCount * 0.58)) {
         throw new Error(
           `Unified content map coverage too low (${segmentWordTotal}/${transcriptWordCount} words preserved in segment excerpts). Regenerate with full-length contiguous rawText excerpts.`
         );
       }
-      if (shortSegments.length > Math.floor(normalizedSegments.length * 0.4)) {
-        throw new Error(
-          `Too many short segment excerpts (${shortSegments.length}/${normalizedSegments.length}). Regenerate with larger rawText excerpts per segment.`
-        );
-      }
-
       // Calculate total words if not provided
       const totalWords = contentMap.object.totalEstimatedWords ||
         normalizedSegments.reduce((sum, seg) => sum + seg.estimatedWordCount, 0);

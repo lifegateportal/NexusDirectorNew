@@ -26,6 +26,7 @@ import type {
   BackMatter,
   EbookJobState,
   EbookManifest,
+  UnifiedContentMap,
 } from "@/lib/schemas/ebook";
 import { SectionAssignmentSchema, EbookJobStateSchema } from "@/lib/schemas/ebook";
 import {
@@ -194,14 +195,37 @@ function countWords(text: string): number {
   return text.trim().split(/\s+/).filter(Boolean).length;
 }
 
+function adaptUnifiedContentMap(unified: UnifiedContentMap): ContentMap {
+  return {
+    totalEstimatedWords: unified.totalEstimatedWords,
+    overarchingThemes: unified.overarchingThemes,
+    teachingArc: unified.teachingArc,
+    coreThesis: unified.coreThesis,
+    targetAudience: unified.targetAudience,
+    uniqueVocabulary: unified.uniqueVocabulary,
+    toneMap: unified.toneMap,
+    segments: unified.segments.map((segment) => ({
+      id: segment.id,
+      sourceAudio: segment.sourceAudio,
+      topic: segment.topic,
+      rawText: segment.rawText,
+      keyPoints: segment.keyPoints,
+      quotes: segment.quotes,
+      estimatedWordCount: segment.estimatedWordCount,
+    })),
+    allQuotes: unified.segments.flatMap((segment) => segment.quotes),
+  };
+}
+
 async function fetchContentMap(
   masterTranscript: string,
   voiceDNA: VoiceDNA | null
 ): Promise<ContentMap> {
-  return postJson<ContentMap>(
-    "/api/ebook/content-map",
-    { masterTranscript, voiceDNA }
+  const unified = await postJson<UnifiedContentMap>(
+    "/api/ebook/unified-content-map",
+    { filteredTranscript: masterTranscript, voiceDNA }
   );
+  return adaptUnifiedContentMap(unified);
 }
 
 function toIsoOrNow(value: unknown, nowIso: string): string {
@@ -2513,10 +2537,7 @@ export function EbookPipeline({
         addLog(`✓ Voice DNA captured`);
       }
 
-      const sourceContentMap = await postJson<ContentMap>("/api/ebook/content-map", {
-        masterTranscript: cleanedTranscript,
-        voiceDNA,
-      });
+      const sourceContentMap = await fetchContentMap(`[${label}]\n${cleanedTranscript}`, voiceDNA);
       addLog(`✓ Content mapped — ${sourceContentMap.segments.length} segments identified`);
 
       // Step 4: Find affected chapters and determine what needs restructuring
@@ -3159,11 +3180,11 @@ export function EbookPipeline({
         addLog("Extracting Voice DNA…");
         voiceDNA = await postJson<VoiceDNA>("/api/ebook/voice-dna", { masterTranscript: teachingTranscript });
         addLog(`✓ Voice DNA captured — tone: ${voiceDNA.toneProfile}`);
-        acc.voiceDNA = voiceDNA;
-        await checkpoint("mapping");
       } else {
         addLog(`↩ Resuming — voice DNA available`);
       }
+      acc.voiceDNA = voiceDNA;
+      await checkpoint("mapping");
 
       // ── Stage 4: Content Map ─────────────────────────────────────────────
       let contentMap = acc.contentMap;
@@ -4113,22 +4134,21 @@ export function EbookPipeline({
       acc.errorLog = logRef.current;
       acc.updatedAt = new Date().toISOString();
       const persistableFailure = sanitizeJobStateForPersistence({ ...acc });
-      try { 
-        await saveEbookJob({ ...persistableFailure }); 
-      } catch (err) {
-        addLog(`⚠ Front matter save failed: ${err instanceof Error ? err.message : 'unknown error'}`);
-      }
+      savedJobRef.current = { ...persistableFailure };
+      onJobStateChange?.({ ...persistableFailure });
       try {
         localStorage.setItem(JOB_STORAGE_KEY, persistableFailure.jobId);
         localStorage.setItem(JOB_STATE_KEY, JSON.stringify(persistableFailure));
       } catch (storageErr) {
         addLog(`⚠ localStorage failure-checkpoint save failed: ${storageErr instanceof Error ? storageErr.message : "quota exceeded"}`);
       }
-      // Update savedJobRef so the Resume button has the partial state
-      savedJobRef.current = { ...persistableFailure };
-      onJobStateChange?.({ ...persistableFailure });
       setStage("failed");
       addLog(`✗ Error: ${msg}`);
+      try {
+        await saveEbookJob({ ...persistableFailure });
+      } catch (saveErr) {
+        addLog(`⚠ Failure checkpoint save failed: ${saveErr instanceof Error ? saveErr.message : "unknown error"}`);
+      }
     }
   }
 
@@ -4195,6 +4215,7 @@ export function EbookPipeline({
     if (saved.chapters.length > 0 || saved.sections.length > 0) {
       return "Resume — continue from writing checkpoint";
     }
+    if (saved.currentStage === "mapping") return "Resume — retry from Content Map";
     if (!saved.voiceDNA) return "Resume — retry from Voice DNA";
     if (!saved.contentMap) return "Resume — retry from Content Map";
     if (!saved.architecture) return "Resume — retry from Chapter Design";
