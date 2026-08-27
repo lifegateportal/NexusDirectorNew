@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback, useId, useEffect, type ChangeEvent } from "react";
+import type { ZodType } from "zod";
 import { ProseEditor, ProseToolbarProvider, SharedProseToolbar } from "./ProseEditor";
 import { EbookProgressRing } from "@/app/components/EbookProgressRing";
 import { VoiceStudio } from "@/app/components/VoiceStudio";
@@ -25,7 +26,6 @@ import type {
   BackMatter,
   EbookJobState,
   EbookManifest,
-  UnifiedContentMap,
 } from "@/lib/schemas/ebook";
 import { SectionAssignmentSchema, EbookJobStateSchema } from "@/lib/schemas/ebook";
 import {
@@ -194,64 +194,25 @@ function countWords(text: string): number {
   return text.trim().split(/\s+/).filter(Boolean).length;
 }
 
-/** Adapter: Convert UnifiedContentMap to legacy ContentMap format for backward compatibility */
-function adaptUnifiedContentMap(unified: UnifiedContentMap): ContentMap {
-  // Extract all quotes from segments
-  const allQuotes = unified.segments.flatMap(seg => seg.quotes || []);
-  
-  // Convert unified segments to legacy format with sourceAudio field
-  const segments = unified.segments.map((seg, idx) => ({
-    id: seg.id,
-    sourceAudio: seg.sourceAudio,
-    topic: seg.topic,
-    rawText: seg.rawText,
-    keyPoints: seg.keyPoints,
-    quotes: seg.quotes,
-    estimatedWordCount: seg.estimatedWordCount,
-  }));
-
-  return {
-    totalEstimatedWords: unified.totalEstimatedWords,
-    overarchingThemes: unified.overarchingThemes,
-    teachingArc: unified.teachingArc,
-    coreThesis: unified.coreThesis,
-    targetAudience: unified.targetAudience,
-    uniqueVocabulary: unified.uniqueVocabulary,
-    toneMap: unified.toneMap,
-    segments,
-    allQuotes,
-  };
-}
-
-/** Fetch content map using either unified (optimized) or legacy (slot-based) approach */
 async function fetchContentMap(
   masterTranscript: string,
   voiceDNA: VoiceDNA | null
 ): Promise<ContentMap> {
-  // Check environment variable for feature flag
-  const useUnified = typeof window !== "undefined" && 
-    document.documentElement.dataset.useUnifiedContentMap === "true";
-  
-  if (useUnified) {
-    // NEW: Single unified call (50-70% token savings)
-    const unified = await postJson<UnifiedContentMap>(
-      "/api/ebook/unified-content-map",
-      { filteredTranscript: masterTranscript, voiceDNA }
-    );
-    return adaptUnifiedContentMap(unified);
-  } else {
-    // OLD: Slot-based approach (fallback)
-    return await postJson<ContentMap>(
-      "/api/ebook/content-map",
-      { masterTranscript, voiceDNA }
-    );
-  }
+  return postJson<ContentMap>(
+    "/api/ebook/content-map",
+    { masterTranscript, voiceDNA }
+  );
 }
 
 function toIsoOrNow(value: unknown, nowIso: string): string {
   if (typeof value !== "string") return nowIso;
   const ts = Date.parse(value);
   return Number.isFinite(ts) ? new Date(ts).toISOString() : nowIso;
+}
+
+function parseCheckpointField<T>(schema: ZodType<T>, value: unknown, fallback: T): T {
+  const parsed = schema.safeParse(value);
+  return parsed.success ? parsed.data : fallback;
 }
 
 function sanitizeJobStateForPersistence(input: EbookJobState): EbookJobState {
@@ -280,28 +241,35 @@ function sanitizeJobStateForPersistence(input: EbookJobState): EbookJobState {
   const parsed = EbookJobStateSchema.safeParse(normalized);
   if (parsed.success) return parsed.data;
 
+  console.warn("[ebook-pipeline] Checkpoint contained invalid fields; preserving valid progress:", parsed.error.issues);
+  const empty = EbookJobStateSchema.parse({
+    jobId: normalized.jobId,
+    createdAt: normalized.createdAt,
+    updatedAt: normalized.updatedAt,
+  });
+
   return {
-    jobId: String(normalized.jobId),
-    status: "idle",
-    audioFileNames: [],
-    transcripts: [],
-    masterTranscript: "",
-    filteredTranscript: "",
-    filterRemovedCount: 0,
-    voiceDNA: null,
-    contentMap: null,
-    architecture: null,
-    sectionAssignments: [],
-    sections: [],
-    chapters: [],
-    frontMatter: null,
-    backMatter: null,
-    exportUrls: null,
-    currentStage: "",
-    progress: { total: 0, completed: 0 },
-    errorLog: [],
-    createdAt: toIsoOrNow(normalized.createdAt, nowIso),
-    updatedAt: toIsoOrNow(normalized.updatedAt, nowIso),
+    jobId: empty.jobId,
+    status: parseCheckpointField(EbookJobStateSchema.shape.status, record.status, empty.status),
+    audioFileNames: parseCheckpointField(EbookJobStateSchema.shape.audioFileNames, record.audioFileNames, empty.audioFileNames),
+    transcripts: parseCheckpointField(EbookJobStateSchema.shape.transcripts, record.transcripts, empty.transcripts),
+    masterTranscript: parseCheckpointField(EbookJobStateSchema.shape.masterTranscript, record.masterTranscript, empty.masterTranscript),
+    filteredTranscript: parseCheckpointField(EbookJobStateSchema.shape.filteredTranscript, record.filteredTranscript, empty.filteredTranscript),
+    filterRemovedCount: parseCheckpointField(EbookJobStateSchema.shape.filterRemovedCount, record.filterRemovedCount, empty.filterRemovedCount),
+    voiceDNA: parseCheckpointField(EbookJobStateSchema.shape.voiceDNA, record.voiceDNA, empty.voiceDNA),
+    contentMap: parseCheckpointField(EbookJobStateSchema.shape.contentMap, record.contentMap, empty.contentMap),
+    architecture: parseCheckpointField(EbookJobStateSchema.shape.architecture, record.architecture, empty.architecture),
+    sectionAssignments: parseCheckpointField(EbookJobStateSchema.shape.sectionAssignments, record.sectionAssignments, empty.sectionAssignments),
+    sections: parseCheckpointField(EbookJobStateSchema.shape.sections, record.sections, empty.sections),
+    chapters: parseCheckpointField(EbookJobStateSchema.shape.chapters, record.chapters, empty.chapters),
+    frontMatter: parseCheckpointField(EbookJobStateSchema.shape.frontMatter, record.frontMatter, empty.frontMatter),
+    backMatter: parseCheckpointField(EbookJobStateSchema.shape.backMatter, record.backMatter, empty.backMatter),
+    exportUrls: parseCheckpointField(EbookJobStateSchema.shape.exportUrls, record.exportUrls, empty.exportUrls),
+    currentStage: parseCheckpointField(EbookJobStateSchema.shape.currentStage, record.currentStage, empty.currentStage),
+    progress: parseCheckpointField(EbookJobStateSchema.shape.progress, record.progress, empty.progress),
+    errorLog: parseCheckpointField(EbookJobStateSchema.shape.errorLog, record.errorLog, empty.errorLog),
+    createdAt: empty.createdAt,
+    updatedAt: empty.updatedAt,
   };
 }
 
