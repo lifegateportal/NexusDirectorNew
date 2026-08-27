@@ -322,10 +322,9 @@ ${sectionPayload}`;
           schema: WriteChapterOutputSchema,
           mode: "json",
           maxTokens: 24_000, // Sufficient for 3-5 sections at 800-1200 words each
-          // Teaching books need warmth and natural flow. 0.65-0.7 produces better
-          // paragraph-to-paragraph connectivity and more organic teaching voice while
-          // maintaining fidelity when combined with strong anti-fabrication instructions.
-          temperature: 0.7,
+          // Single-pass chapter writing benefits from stable JSON generation.
+          // Instructions handle flow and connectivity; temperature stays conservative.
+          temperature: 0.5,
           system,
           prompt,
         });
