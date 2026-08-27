@@ -167,57 +167,64 @@ You are writing ALL ${sections.length} sections of Chapter ${chapterNumber} in a
 # SYNTHESIS, NOT TRANSCRIPTION
 Extract core insights from the transcript. Reassemble as premium book prose — NOT paraphrased sentences. Every claim must trace to the provided excerpts. Zero fabrication.
 
-# TRANSCRIPT EXHAUSTION — MANDATORY COVERAGE
-• Every numbered excerpt [1], [2], [3]... must be accounted for in your output
-• If an excerpt contains multiple teaching points, stories, or applications — ALL must be extracted and developed
-• Mental coverage checklist: scan each excerpt before finishing — did I use every usable insight?
-• No "sampling" from excerpts — if the speaker made 4 points in an excerpt, write all 4
-• Each KEY POINT must appear as a fully developed argument (2-3 paragraphs minimum), not a single-sentence mention
-• Stories require: setting, tension, resolution — not just "the speaker mentioned X"
-• Scripture exposition requires ALL of: quote → what it says → what it means → how speaker applies it
+# ABSOLUTE FIDELITY — CARDINAL RULE
+• Every sentence must trace to a transcript excerpt. No exceptions.
+• PROHIBITED: Theological context speaker didn't provide, historical background speaker didn't mention, scripture context speaker didn't explain, applications speaker didn't make, examples speaker didn't use, emotional appeals speaker didn't express
+• PROHIBITED: "Plausible extensions", connecting tissue speaker didn't provide, explanatory framing speaker didn't give
 • If you cannot cite the supporting excerpt number [N] for a sentence, that sentence is fabricated — delete it
+• When transcript material is thin: Write shorter brilliantly. Two excellent paragraphs beat four where two are invented.
+• When transcript material is rich: Extract EVERYTHING. Eight excellent paragraphs from rich source beat five where you stopped early.
 
-# ANTI-PADDING DISCIPLINE — WRITE LESS, NOT MORE
-• When transcript material thins out, STOP writing rather than invent connective tissue
-• Three brilliant paragraphs beat five mediocre ones where two were padded with invented content
-• BANNED PADDING: plausible extensions, theological fill, inferred background, "what the author probably meant"
-• If you're explaining context the speaker didn't provide, you're fabricating — stop
-• Target word counts are MAXIMUMS based on available content, not quotas to fill with invented prose
-• Thin section material = shorter brilliant output. Never apologize for brevity when faithful to source.
+# TRANSCRIPT EXHAUSTION — EXTRACT ALL DISTINCT INSIGHTS
+• Every numbered excerpt [1], [2], [3]... must be fully mined for ALL its distinct teaching points
+• Read each excerpt completely: identify distinct insights, stories, applications, scripture expositions
+• If excerpt contains 5 separate insights, extract and develop all 5 using ONLY what speaker said about each
+• If excerpt contains 1 insight repeated 3 ways, develop it once well
+• Each key point gets development depth the speaker gave it: 2-minute point = 2-3 paragraphs naturally; passing mention = 1 paragraph
+• Stories: Tell completely as speaker told it (no invented details, dialogue, or setting) — if speaker gave full narrative, write 2-3 paragraphs; if quick anecdote, write 1 paragraph
+• Scripture exposition: Develop ONLY stages speaker provided (context ONLY if speaker gave it, quote as speaker used it, explanation ONLY speaker's interpretation, application ONLY speaker's application)
 
-# CONTENT COVERAGE — CRITICAL
-• EXHAUST every distinct key point, story, illustration, and argument from each section's excerpts
-• Meet or exceed the target word count for each section (±15% acceptable)
-• Each section must develop ALL its assigned key points fully — not just mention them
-• Write shorter ONLY to avoid bleeding into the next section/chapter — never to save tokens
-• If you finish a section well under target word count, you missed content from the excerpts
+# EARNED LENGTH — NO QUOTA FILLING
+• Word counts are ESTIMATES based on transcript richness, NOT quotas to fill
+• Rich transcript with many distinct insights = naturally longer output (may exceed target)
+• Thin transcript with few insights = naturally shorter output (will fall short of target)
+• NEVER pad to reach a target. NEVER truncate rich material to stay under target.
+• Output length must be EARNED from transcript, never manufactured.
+• Result: Multi-sermon chapters with rich teaching will naturally produce longer output through exhaustive extraction, NOT through padding
 
-# BESTSELLER PROSE STANDARDS — CRAFT-LEVEL EXECUTION
+# FLOW & CONNECTIVITY — TEACHING BOOK STANDARDS
+PARAGRAPH-TO-PARAGRAPH FLOW:
+Every paragraph must connect naturally to the next. Use these strategies:
+• Echo and advance (preferred): Pick up word/concept from prior paragraph's close, use as springboard for next
+• Logical connectives (use sparingly): "This principle deepens when...", "Yet Scripture reveals...", "Because of this...", "Consider how..."
+• Question bridges: End paragraph with implicit question, next paragraph answers
+• PROHIBITED: Abrupt topic jumps with no bridge. Vary your connective strategy — don't repeat same pattern 3 times in a row.
+
+SECTION-TO-SECTION TRANSITIONS:
+Section breaks are breathing points within continuous argument, NOT hard stops.
+• Section closing: Create momentum toward next section (pose question, tension, or implication next section resolves)
+• Section opening: Acknowledge prior conclusion (1 sentence max if needed), bridge to new territory smoothly
+• NEVER start with meta-commentary: "Now we turn to...", "In this section...", "Let's look at..."
+• Transition techniques: question bridge, expansion bridge, application bridge, story continuation
+• LAST SECTION: Honor chapter boundary — do NOT preview next chapter themes
+
+# BESTSELLER PROSE STANDARDS
 OPENING HOOKS:
-• First sentence of each section must create forward momentum — never throat-clear
-• Open with tension, question, vivid image, or provocative claim (drawn from transcript)
-• BANNED OPENINGS: "Let's explore", "It's important to", "We need to understand", "In this section"
+• First sentence creates immediate engagement: tension, question, vivid image, provocative claim (all from transcript)
+• BANNED: "Let's explore", "It's important to", "We need to understand", "In this section"
 
 NARRATIVE RHYTHM:
-• Vary sentence length deliberately: short punchy beat after long development
-• Three short sentences in a row = monotony. Break the pattern.
-• Long complex sentence followed by fragment or 3-5 word punch = mastery
-
-READER PAYOFF:
-• Every paragraph must deliver insight, revelation, or story advancement — not setup
-• If a paragraph only prepares the reader for the next one, merge them
-• No "bridge paragraphs" that exist only to connect two ideas
+• Vary sentence length deliberately: long development (20-30 words) → short punch (4-8 words) → medium bridge (12-18 words)
+• Three similar-length sentences = monotony. Break the pattern.
 
 VISCERAL LANGUAGE:
-• Replace abstract terms with concrete images when transcript provides them
-• "spiritual growth" < "roots deepening in rocky soil" (if speaker used that image)
-• "divine provision" < "manna appearing at dawn" (if that's the speaker's example)
-• Use the speaker's actual metaphors and images — they chose them for a reason
+• Use speaker's concrete images over abstract terms: "roots going deep into rocky soil" > "spiritual foundation"
+• The speaker chose those metaphors for emotional resonance — honor their choices
 
 ZERO FILLER:
 • Delete throat-clearing: "Now", "So", "Well", "You see", "Here's the thing"
 • Delete meta-commentary: "This is crucial", "Pay attention to this", "Notice that"
-• Delete false transitions: "Moving on", "Another point", "Additionally"
+• Delete false transitions: "Moving on", "Another point", "Additionally", "Furthermore", "Moreover"
 
 # VOICE AND STYLE
 • Active voice, strong verbs, authoritative tone
@@ -233,18 +240,20 @@ Each paragraph is a string in a JSON array. Give each paragraph one teaching adv
 # SECTION BOUNDARIES
 Each section is sealed. Do NOT preview the next section's content from within the current one. Presuppose what you just wrote — opening sentences of Section 2+ must not re-introduce concepts already developed.
 
-# SCRIPTURE RULES
+# SCRIPTURE RULES — TEACHING MATERIAL STANDARDS
+• FULL QUOTATIONS: Quote verses EXACTLY as speaker used them. If they read 10 verses, print all 10. NEVER shorten or truncate for space.
+• Teaching books require complete scriptural context. Short reference-only citations acceptable ONLY when speaker merely referenced without reading.
 • Reproduce only the complete verified Scripture text supplied in ASSIGNED QUOTES. Never reconstruct, complete, correct, or paraphrase verse text from memory
-• REMOVE SECTION HEADINGS: Strip any editorial headings or titles that appear in the verified text (e.g., "The Lord Is My Shepherd", "Jesus Heals the Blind Man"). Print only the verse text itself.
+• REMOVE SECTION HEADINGS: Strip editorial titles like "The Lord Is My Shepherd" or "Jesus Heals the Sick" — print verse text only
 • Short (<40 words): *"verse text"* (Book Chapter:Verse, Translation) inline
 • Long (40+ words): markdown blockquote with no quotation marks; place *Book Chapter:Verse, Translation* on its own final blockquote line with no dash
-• Use a comma before the translation abbreviation in every citation: (Psalm 27:1, NIV), not (Psalm 27:1 NIV)
-• Use an en dash in verse ranges: Titus 2:11–14
-• Develop only the truth or application the speaker explicitly draws from the text; never force an application circuit
-• No post-quote restatement (next sentence must ADVANCE the argument, not re-explain the quote)
-• Anchor controlling verse BEFORE exposition, not after
-• Preserve Greek/Hebrew terms exactly as the speaker stated them
-• If verified text is unavailable, cite the reference only; never supply verse wording from memory
+• Use comma before translation: (Psalm 27:1, NIV) not (Psalm 27:1 NIV)
+• Use en dash in verse ranges: Titus 2:11–14
+• Develop ONLY the truth/application the speaker explicitly draws — never add context speaker didn't provide
+• No post-quote restatement (next sentence must ADVANCE, not re-explain)
+• Anchor controlling verse BEFORE exposition
+• Preserve Greek/Hebrew terms exactly as speaker stated them
+• If verified text unavailable, cite reference only; never supply wording from memory
 
 # REMOVE FROM OUTPUT — HARD RULE: if any of these appear in output, the book fails QC
 • Live-event audience address: "say amen", "somebody say", "turn to your neighbor", "give your neighbor a high five", "can I get an amen", "clap your hands", "stand to your feet", "you may be seated"
@@ -274,13 +283,27 @@ Return a JSON object with a "sections" array. Each element:
   paragraphs: string[] — each string is one prose paragraph
   claimLedger: { claim: string }[] — one entry per key teaching claim made in this section
 
-EXCERPT ACCOUNTABILITY — SELF-CHECK BEFORE RETURNING:
-Before finalizing each section, verify:
-✓ Every numbered excerpt [1], [2], [3]... has contributed content to the output
-✓ Every key point listed has 2-3 paragraphs of development (not just a mention)
-✓ Every assigned quote appears in the prose with proper formatting
-✓ No paragraph exists that cannot cite its supporting excerpt number
-✓ Word count within ±15% of target (unless transcript material genuinely insufficient)
+PRE-SUBMISSION CHECKLIST — VERIFY BEFORE RETURNING:
+COVERAGE:
+✓ Every [N] excerpt has contributed ALL its distinct insights
+✓ Every key point developed to depth speaker gave it (not generic depth)
+✓ Every assigned scripture quoted in full exactly as speaker used it
+✓ Every scripture exposited ONLY to degree speaker exposited it
+✓ Every story told completely as speaker told it (no invented details)
+✓ Output length earned from transcript richness, not manufactured
+
+FLOW:
+✓ First sentence creates engagement (no throat-clearing)
+✓ Every paragraph connects naturally to next
+✓ Section closing creates forward momentum (unless last section)
+✓ Section opening bridges smoothly from prior section
+✓ No abrupt topic jumps without connective tissue
+
+FIDELITY:
+✓ Every sentence can cite supporting excerpt number
+✓ No fabricated content, applications, context, or theological extensions
+✓ No scripture context added that speaker didn't provide
+✓ No padding to meet target — output reflects actual transcript depth
 
 ────────────────────────────────────────────
 
@@ -299,9 +322,10 @@ ${sectionPayload}`;
           schema: WriteChapterOutputSchema,
           mode: "json",
           maxTokens: 24_000, // Sufficient for 3-5 sections at 800-1200 words each
-          // Single-pass chapter writing benefits from tighter variance so all
-          // sections stay refined, coherent, and stylistically consistent.
-          temperature: 0.5,
+          // Teaching books need warmth and natural flow. 0.65-0.7 produces better
+          // paragraph-to-paragraph connectivity and more organic teaching voice while
+          // maintaining fidelity when combined with strong anti-fabrication instructions.
+          temperature: 0.7,
           system,
           prompt,
         });
