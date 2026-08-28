@@ -113,7 +113,7 @@ closingPattern
         schema: VoiceDNASchema,
         mode: "json",
         temperature: 0.2,
-        maxTokens: 1400,
+        maxTokens: 2400,
         experimental_repairText: repairGeneratedJson,
         system: systemPrompt,
         prompt: userPrompt,

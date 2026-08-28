@@ -7,13 +7,25 @@ export class UnusableStructuredOutputError extends Error {
   }
 }
 
+function isolateJsonObject(text: string): string {
+  const unfenced = text
+    .trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/i, "");
+  const objectStart = unfenced.indexOf("{");
+  if (objectStart < 0) return unfenced;
+
+  const objectEnd = unfenced.lastIndexOf("}");
+  return objectEnd > objectStart
+    ? unfenced.slice(objectStart, objectEnd + 1)
+    : unfenced.slice(objectStart);
+}
+
 export async function repairGeneratedJson({ text }: { text: string }): Promise<string | null> {
   try {
-    const unfenced = text
-      .trim()
-      .replace(/^```(?:json)?\s*/i, "")
-      .replace(/\s*```$/i, "");
-    return jsonrepair(unfenced);
+    const candidate = isolateJsonObject(text);
+    if (!candidate) return null;
+    return jsonrepair(candidate);
   } catch (error) {
     console.warn("[structured-output] Local JSON repair failed:", error);
     return null;
