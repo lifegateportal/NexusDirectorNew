@@ -4,9 +4,10 @@ import { z } from "zod";
 import { deepSeekModel } from "@/lib/ai-providers";
 import { ChapterPlanRequestSchema, ChapterPlanResponseSchema } from "@/lib/schemas/ebook";
 import { SOURCE_LOCK_RULES, READER_NORMALIZATION_RULES } from "@/lib/editorial-style-bible";
+import { repairGeneratedJson, retryUnusableStructuredOutput, UnusableStructuredOutputError } from "@/lib/structured-output";
 
 export const runtime = "nodejs";
-export const maxDuration = 120;
+export const maxDuration = 300;
 
 // ── N-gram helpers (mirrors write-section) ───────────────────────────────────
 
@@ -200,16 +201,31 @@ ${excerptPayload}`;
   // close the connection with a 504/524 before the response arrives.
   // We send a space every 15s; JSON.parse (used by res.json()) ignores leading whitespace.
   const encoder = new TextEncoder();
-  const generatePromise = generateObject({
+  const generatePromise = retryUnusableStructuredOutput(async () => {
+    const result = await generateObject({
     // Chapter plan uses structured output and must run on a model that supports
     // generateObject JSON mode reliably.
     model: deepSeekModel,
     schema: ChapterPlanLLMSchema,
     mode: "json",
     temperature: 0.2,
+    experimental_repairText: repairGeneratedJson,
     system,
     prompt,
-  });
+    });
+    const plannedSections = new Set(
+      result.object.sectionPlans
+        .filter((plan) => plan.paragraphPlan.length > 0)
+        .map((plan) => plan.sectionNumber)
+    );
+    const missingSections = sections.filter((section) => !plannedSections.has(section.sectionNumber));
+    if (missingSections.length > 0) {
+      throw new UnusableStructuredOutputError(
+        `Chapter plan omitted section(s): ${missingSections.map((section) => section.sectionNumber).join(", ")}`
+      );
+    }
+    return result;
+  }, `chapter-plan:${chapterNumber}`);
 
   const stream = new ReadableStream({
     async start(controller) {

@@ -5,6 +5,7 @@ import { deepSeekModel } from "@/lib/ai-providers";
 import { WriteChapterRequestSchema, WriteChapterOutputSchema } from "@/lib/schemas/ebook";
 import { SOURCE_LOCK_RULES, PROSE_MASTERY_RULES, READER_NORMALIZATION_RULES, PREMIUM_BOOK_STYLE_RULES, stripAudienceLanguage, cleanTranscriptForBook } from "@/lib/editorial-style-bible";
 import { hydrateScriptureQuotes } from "@/lib/scripture-service";
+import { repairGeneratedJson } from "@/lib/structured-output";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -332,6 +333,7 @@ ${sectionPayload}`;
           // Single-pass chapter writing benefits from stable JSON generation.
           // Instructions handle flow and connectivity; temperature stays conservative.
           temperature: 0.5,
+          experimental_repairText: repairGeneratedJson,
           system,
           prompt,
         });

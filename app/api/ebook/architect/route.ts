@@ -1,13 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateObject } from "ai";
 import { z } from "zod";
-import { deepSeekReasonerModel } from "@/lib/ai-providers";
+import { deepSeekModel } from "@/lib/ai-providers";
 import { env } from "@/lib/env";
 import { ArchitectRequestSchema } from "@/lib/schemas/ebook";
 import { SOURCE_LOCK_RULES } from "@/lib/editorial-style-bible";
+import { mapWithConcurrency, repairGeneratedJson, retryUnusableStructuredOutput, UnusableStructuredOutputError } from "@/lib/structured-output";
 
 export const runtime = "nodejs";
-export const maxDuration = 120;
+export const maxDuration = 300;
 
 // ── Upgrade helpers ───────────────────────────────────────────────────────────
 
@@ -265,13 +266,14 @@ async function architectOneChapterFromTranscript(
     ].join("\n");
   }).join("\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\n");
 
-  const { object } = await generateObject({
-    model: deepSeekReasonerModel,
-    schema: SingleChapterPlanSchema,
-    mode: "json",
-    temperature: 1,
-    maxTokens: 8000,
-    system: `You are a senior structural editor turning one teaching message into a premium book chapter.
+  return retryUnusableStructuredOutput(async () => {
+    const { object } = await generateObject({
+      model: deepSeekModel,
+      schema: SingleChapterPlanSchema,
+      mode: "json",
+      temperature: 1,
+      maxTokens: 8000,
+      system: `You are a senior structural editor turning one teaching message into a premium book chapter.
 
 SOURCE-LOCK — ABSOLUTE RULE:
 Every title, section heading, and key theme you write MUST derive word-for-word or idea-for-idea from the transcript segments below. You may NOT invent, assume, or extrapolate anything not explicitly present in the provided text.
@@ -312,8 +314,13 @@ TEACHING ARC: ${teachingArc}
 VOICE TONE: ${voiceDNATone}
 
 ${transcriptBlock}`,
-  });
-  return object;
+      experimental_repairText: repairGeneratedJson,
+    });
+    if (object.sections.length === 0) {
+      throw new UnusableStructuredOutputError("Architect returned no sections for a source chapter");
+    }
+    return object;
+  }, "architect:single-chapter");
 }
 
 function fallbackArchitecture(input: z.infer<typeof ArchitectRequestSchema>) {
@@ -499,8 +506,10 @@ export async function POST(req: NextRequest) {
         }
         const audioKeys = audioOrder.filter((k) => segsByAudio.has(k));
 
-        const chapterPlans = await Promise.all(
-          audioKeys.map((audioKey, idx) => {
+        const chapterPlans = await mapWithConcurrency(
+          audioKeys,
+          3,
+          (audioKey, idx) => {
             const segs = segsByAudio.get(audioKey)!;
             const chapterHint = (input.contentMap.overarchingThemes[idx] || "").trim()
               || segs.map((s) => s.topic).sort((a, b) => b.length - a.length)[0]
@@ -511,23 +520,14 @@ export async function POST(req: NextRequest) {
               input.contentMap.coreThesis,
               input.contentMap.teachingArc,
               input.voiceDNA.toneProfile,
-            ).catch(() => null);
-          })
+            );
+          }
         );
 
         const validIds = new Set(input.contentMap.segments.map((s) => s.id));
         const chapters = chapterPlans.map((plan, idx) => {
           const segs = segsByAudio.get(audioKeys[idx])!;
           const themeHint = (input.contentMap.overarchingThemes[idx] || segs[0]?.topic || `Chapter ${idx + 1}`).trim();
-          if (!plan || plan.sections.length === 0) {
-            const grouped = groupSegmentsIntoSections(segs, 5);
-            return {
-              number: idx + 1,
-              title: themeHint,
-              keyTheme: themeHint,
-              sections: grouped.map((sec, si) => ({ sectionNumber: si + 1, ...sec })),
-            };
-          }
           return {
             number: idx + 1,
             title: (plan.title || themeHint).trim(),
@@ -562,12 +562,13 @@ export async function POST(req: NextRequest) {
         };
       } else {
       {
-        const result = await generateObject({
-        model: deepSeekReasonerModel,
-        schema: MinimalArchitectureSchema,
-        mode: "json",
-        maxTokens: 16000,
-        system: `# ROLE
+        const result = await retryUnusableStructuredOutput(async () => {
+          const generated = await generateObject({
+          model: deepSeekModel,
+          schema: MinimalArchitectureSchema,
+          mode: "json",
+          maxTokens: 16000,
+          system: `# ROLE
 You are an elite structural editor for a top-tier publishing house. Your job is to map raw, sanitized audio transcript segments into a clean chapter architecture for a published book series.
 
 # OBJECTIVE
@@ -604,12 +605,18 @@ This content is a sermon series. The author's preaching sequence IS the book's s
 
       SEGMENTS:
       ${JSON.stringify(segmentsLite)}`,
-        });
+          experimental_repairText: repairGeneratedJson,
+          });
+          if (generated.object.chapters.length === 0) {
+            throw new UnusableStructuredOutputError("Architect returned no chapters");
+          }
+          return generated;
+        }, "architect");
         minimal = result.object;
       } // end LLM block
       } // end else
-    } catch {
-      minimal = fallbackArchitecture(input);
+    } catch (error) {
+      throw error;
     }
 
     const normalized = normalizeArchitecture(minimal, input);

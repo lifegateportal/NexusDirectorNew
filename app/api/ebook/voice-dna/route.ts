@@ -1,101 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
-import { generateObject, generateText } from "ai";
+import { generateObject } from "ai";
 import { deepSeekModel } from "@/lib/ai-providers";
 import { VoiceDNASchema, VoiceDNARequestSchema } from "@/lib/schemas/ebook";
+import { repairGeneratedJson, retryUnusableStructuredOutput, UnusableStructuredOutputError } from "@/lib/structured-output";
 
 export const runtime = "nodejs";
-export const maxDuration = 120;
-
-function stripMarkdownFences(text: string): string {
-  return text
-    .trim()
-    .replace(/^```(?:json)?\s*/i, "")
-    .replace(/\s*```$/i, "");
-}
-
-function tryParseJsonObject(raw: string): unknown {
-  const text = stripMarkdownFences(raw);
-  const start = text.indexOf("{");
-  if (start < 0) throw new Error("No JSON object found in model response");
-
-  let inString = false;
-  let escaped = false;
-  const stack: string[] = [];
-  let lastCompleteObjectEnd = -1;
-
-  for (let i = start; i < text.length; i++) {
-    const ch = text[i];
-
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-      } else if (ch === "\\") {
-        escaped = true;
-      } else if (ch === '"') {
-        inString = false;
-      }
-      continue;
-    }
-
-    if (ch === '"') {
-      inString = true;
-      continue;
-    }
-
-    if (ch === "{") {
-      stack.push("}");
-      continue;
-    }
-
-    if (ch === "[") {
-      stack.push("]");
-      continue;
-    }
-
-    if (ch === "}" || ch === "]") {
-      const expected = stack.pop();
-      if (!expected || expected !== ch) {
-        continue;
-      }
-      if (stack.length === 0) {
-        lastCompleteObjectEnd = i;
-        break;
-      }
-    }
-  }
-
-  if (lastCompleteObjectEnd >= 0) {
-    const strictSlice = text.slice(start, lastCompleteObjectEnd + 1);
-    return JSON.parse(strictSlice);
-  }
-
-  // Best-effort repair for truncated output: close open strings/containers, remove trailing commas.
-  let repaired = text.slice(start).trim();
-  if (inString && !escaped) repaired += '"';
-  repaired += stack.slice().reverse().join("");
-  repaired = repaired.replace(/,\s*([}\]])/g, "$1");
-  return JSON.parse(repaired);
-}
-
-function toneFromText(raw: string): string {
-  const text = stripMarkdownFences(raw);
-  const lineMatch = text.match(/(?:"toneProfile"|toneProfile|tone)\s*[:=-]\s*"?([^"\n\r,}]{4,120})"?/i);
-  if (lineMatch?.[1]) return lineMatch[1].trim();
-
-  const adjectiveMatch = text.match(/\b(pastoral|warm|direct|authoritative|scholarly|measured|conversational|prophetic|instructional)\b(?:\s*,\s*\b[a-z-]+\b){0,4}/i);
-  if (adjectiveMatch?.[0]) return adjectiveMatch[0].trim();
-
-  return "direct, clear, pastoral";
-}
+export const maxDuration = 300;
 
 function ensureToneProfile(dna: unknown) {
   const parsed = VoiceDNASchema.parse(dna);
   if (parsed.toneProfile.trim()) return parsed;
-
-  return {
-    ...parsed,
-    toneProfile: "direct, clear, pastoral",
-  };
+  throw new UnusableStructuredOutputError("Voice DNA tone profile is empty");
 }
 
 export async function POST(req: NextRequest) {
@@ -192,39 +107,21 @@ closingPattern
   const userPrompt = `Extract the author's Voice DNA from this transcript sample:\n\n${sampleTranscript}`;
 
   try {
-    try {
+    const normalized = await retryUnusableStructuredOutput(async () => {
       const { object } = await generateObject({
         model: deepSeekModel,
         schema: VoiceDNASchema,
         mode: "json",
         temperature: 0.2,
         maxTokens: 1400,
+        experimental_repairText: repairGeneratedJson,
         system: systemPrompt,
         prompt: userPrompt,
       });
+      return ensureToneProfile(object);
+    }, "voice-dna");
 
-      const normalized = ensureToneProfile(object);
-      return NextResponse.json(normalized, { status: 200 });
-    } catch {
-      // DeepSeek occasionally returns near-JSON text in json mode; strict re-ask + local validation recovers safely.
-      const { text } = await generateText({
-        model: deepSeekModel,
-        temperature: 0.2,
-        maxTokens: 1800,
-        system: `${systemPrompt}\n\nReturn ONLY a valid JSON object. No markdown fences. No commentary.`,
-        prompt: userPrompt,
-      });
-
-      try {
-        const parsed = VoiceDNASchema.parse(tryParseJsonObject(text));
-        const normalized = ensureToneProfile(parsed);
-        return NextResponse.json(normalized, { status: 200 });
-      } catch {
-        // Deterministic last-chance fallback (no additional model call) to prevent timeout cascades.
-        const fallback = ensureToneProfile({ toneProfile: toneFromText(text) });
-        return NextResponse.json(fallback, { status: 200 });
-      }
-    }
+    return NextResponse.json(normalized, { status: 200 });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Voice DNA extraction failed";
     return NextResponse.json({ error: message }, { status: 500 });

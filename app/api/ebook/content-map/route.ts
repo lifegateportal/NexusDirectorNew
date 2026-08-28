@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateObject } from "ai";
 import { z } from "zod";
-import { jsonrepair } from "jsonrepair";
 import { deepSeekModel } from "@/lib/ai-providers";
 import { ContentMapRequestSchema, QuoteSchema } from "@/lib/schemas/ebook";
+import { mapWithConcurrency, repairGeneratedJson, retryUnusableStructuredOutput, UnusableStructuredOutputError } from "@/lib/structured-output";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -34,30 +34,23 @@ const SlotSegmentsSchema = z.object({
   segments: z.array(SlotSegmentExtractSchema),
 });
 
-async function repairGeneratedJson({ text }: { text: string }): Promise<string | null> {
-  try {
-    return jsonrepair(text);
-  } catch (error) {
-    console.warn("[content-map] Local JSON repair failed:", error);
-    return null;
-  }
-}
-
 async function extractSlotSegments(sourceAudio: string, text: string) {
-  const { object } = await generateObject({
-    model: deepSeekModel,
-    schema: SlotSegmentsSchema,
-    mode: "json",
-    temperature: 0.2,
-    maxTokens: 8000,
-    experimental_repairText: repairGeneratedJson,
-    system: SEGMENT_SYSTEM,
-    prompt: `Extract all teaching segments from this recording (${sourceAudio}):\n\n${text}`,
-  });
-  if (object.segments.length === 0) {
-    throw new Error(`No segments returned for ${sourceAudio}`);
-  }
-  return object.segments;
+  return retryUnusableStructuredOutput(async () => {
+    const { object } = await generateObject({
+      model: deepSeekModel,
+      schema: SlotSegmentsSchema,
+      mode: "json",
+      temperature: 0.2,
+      maxTokens: 8000,
+      experimental_repairText: repairGeneratedJson,
+      system: SEGMENT_SYSTEM,
+      prompt: `Extract all teaching segments from this recording (${sourceAudio}):\n\n${text}`,
+    });
+    if (object.segments.length === 0) {
+      throw new UnusableStructuredOutputError(`No segments returned for ${sourceAudio}`);
+    }
+    return object.segments;
+  }, `content-map:${sourceAudio}`);
 }
 
 // Final synthesis schema (receives only topics/themes, no raw text)
@@ -168,8 +161,10 @@ export async function POST(req: NextRequest) {
       dedupedSegs: z.infer<typeof SlotSegmentExtractSchema>[];
     };
 
-    const slotResults: DedupedSlotResult[] = await Promise.all(
-      slotChunks.map(async (chunk): Promise<DedupedSlotResult> => {
+    const slotResults = await mapWithConcurrency(
+      slotChunks,
+      3,
+      async (chunk): Promise<DedupedSlotResult> => {
         // A8: Isolate per-slot failures — a single bad LLM call must not abort the whole map
         try {
           const slotWords = chunk.text.split(/\s+/);
@@ -184,11 +179,13 @@ export async function POST(req: NextRequest) {
           }
 
           // Process all chunk ranges within this slot in parallel too.
-          const chunkSegments = await Promise.all(
-            chunkRanges.map((range) => {
+          const chunkSegments = await mapWithConcurrency(
+            chunkRanges,
+            2,
+            (range) => {
               const chunkText = slotWords.slice(range.start, range.end).join(" ");
               return extractSlotSegments(chunk.sourceAudio, chunkText);
-            })
+            }
           );
 
           const rawSegmentsForSlot = chunkSegments.flat();
@@ -207,7 +204,7 @@ export async function POST(req: NextRequest) {
           console.error(`[content-map] Slot ${chunk.sourceAudio} failed:`, slotErr);
           throw slotErr;
         }
-      })
+      }
     );
 
     // ── Assemble segments sequentially so IDs are deterministic ──────────────
@@ -298,7 +295,7 @@ export async function POST(req: NextRequest) {
 
     ${topicSummary}`;
 
-    const { object: synthesis } = await generateObject({
+    const { object: synthesis } = await retryUnusableStructuredOutput(() => generateObject({
       model: deepSeekModel,
       schema: SynthesisSchema,
       mode: "json",
@@ -307,7 +304,7 @@ export async function POST(req: NextRequest) {
       experimental_repairText: repairGeneratedJson,
       system: synthesisSystem,
       prompt: synthesisPrompt,
-    });
+    }), "content-map:synthesis");
 
     const contentMap = {
       ...synthesis,
