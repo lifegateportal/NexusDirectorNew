@@ -4,8 +4,6 @@ import { z } from "zod";
 import { deepSeekModel } from "@/lib/ai-providers";
 import { WriteChapterRequestSchema, WriteChapterOutputSchema } from "@/lib/schemas/ebook";
 import { SOURCE_LOCK_RULES, PROSE_MASTERY_RULES, READER_NORMALIZATION_RULES, PREMIUM_BOOK_STYLE_RULES, stripAudienceLanguage, cleanTranscriptForBook } from "@/lib/editorial-style-bible";
-import { hydrateScriptureQuotes } from "@/lib/scripture-service";
-import { repairGeneratedJson } from "@/lib/structured-output";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -21,34 +19,10 @@ export async function POST(req: NextRequest) {
 
   const {
     chapterNumber, chapterTitle, chapterPremise, nextChapterTitle, coreThesis,
-    primaryTranslation, voiceDNA, authorConfig, sections: unverifiedSections,
+    primaryTranslation, voiceDNA, authorConfig, sections,
     alreadyCoveredPoints, priorSectionsSample, bannedRecaps,
     alreadyQuotedRefs, forbiddenVerseTexts, overusedPhrases,
   } = input;
-
-  let sections;
-  try {
-    const unplannedSections = unverifiedSections.filter((section) => !section.assignedPlan?.length);
-    if (unplannedSections.length > 0) {
-      return NextResponse.json({
-        error: "Source-backed paragraph plans required",
-        details: `Chapter ${chapterNumber} cannot be drafted without plans for section(s): ${unplannedSections.map((section) => section.sectionNumber).join(", ")}`,
-      }, { status: 409 });
-    }
-    sections = await Promise.all(unverifiedSections.map(async (section) => ({
-      ...section,
-      quotes: await hydrateScriptureQuotes({
-        quotes: section.quotes,
-        sourceTexts: section.transcriptExcerpts,
-        defaultTranslation: primaryTranslation,
-      }),
-    })));
-  } catch (error) {
-    return NextResponse.json({
-      error: "Scripture verification failed",
-      details: error instanceof Error ? error.message : "Live Scripture provider unavailable",
-    }, { status: 502 });
-  }
 
   // ── Voice DNA block ────────────────────────────────────────────────────────
   const voiceDnaBlock = voiceDNA
@@ -76,14 +50,6 @@ PRIOR CHAPTERS — PROSE SAMPLE (avoid repeating these stories/examples)
 ════════════════════════════════════════════
 These are actual sentences from prior chapters. Do NOT repeat these stories, examples, or scripture explanations. One-sentence reference maximum:
 ${priorSectionsSample.slice(0, 20).map((p) => `• ${p.slice(0, 200)}`).join("\n")}`
-    : "";
-
-  const coveredPointsBlock = alreadyCoveredPoints.length > 0
-    ? `\n\n════════════════════════════════════════════
-PRIOR CHAPTER CLAIMS — HARD SKIP
-════════════════════════════════════════════
-These claims already belong to earlier chapters. Do not explain, paraphrase, illustrate, or re-teach them. A brief callback is allowed only when required to advance new source material:
-${alreadyCoveredPoints.slice(0, 40).map((point) => `• ${point.slice(0, 300)}`).join("\n")}`
     : "";
 
   const bannedRecapsBlock = bannedRecaps.length > 0
@@ -114,35 +80,10 @@ These 3-gram constructions are already overused across prior chapters. Avoid the
 
   // ── Build section payload ──────────────────────────────────────────────────
   const sectionPayload = sections.map((sec, idx) => {
-    // Balance rich content delivery with stable JSON generation.
-    // These caps allow exhaustive transcript coverage for teaching books while
-    // preventing context overflow that breaks structured output.
-    const excerptWordCap = 600;    // 2.3x increase for fuller story/teaching development
-    const sectionWordCap = 4500;   // 2.8x increase for comprehensive section coverage
-    let sectionWordTally = 0;
-    const boundedExcerpts: Array<{ sourceNumber: number; part: number; totalParts: number; text: string }> = [];
-    for (const [sourceIndex, rawExcerpt] of (sec.transcriptExcerpts ?? []).entries()) {
-      const cleaned = cleanTranscriptForBook(rawExcerpt).trim();
-      if (!cleaned) continue;
-      const words = cleaned.split(/\s+/).filter(Boolean);
-      const totalParts = Math.ceil(words.length / excerptWordCap);
-      for (let offset = 0; offset < words.length && sectionWordTally < sectionWordCap; offset += excerptWordCap) {
-        const remaining = sectionWordCap - sectionWordTally;
-        const chunk = words.slice(offset, offset + Math.min(excerptWordCap, remaining));
-        if (chunk.length === 0) break;
-        boundedExcerpts.push({
-          sourceNumber: sourceIndex + 1,
-          part: Math.floor(offset / excerptWordCap) + 1,
-          totalParts,
-          text: chunk.join(" "),
-        });
-        sectionWordTally += chunk.length;
-      }
-      if (sectionWordTally >= sectionWordCap) break;
-    }
-
-    const excerpts = boundedExcerpts
-      .map((excerpt) => `[${excerpt.sourceNumber} part ${excerpt.part}/${excerpt.totalParts}] ${excerpt.text}`)
+    const excerpts = (sec.transcriptExcerpts ?? [])
+      .map((e) => cleanTranscriptForBook(e).trim())
+      .filter(Boolean)
+      .map((e, i) => `[${i + 1}] ${e.slice(0, 1600)}`)
       .join("\n\n");
     const planBlock = (sec.assignedPlan ?? []).length > 0
       ? `\nPARAGRAPH PLAN (follow this sequence):\n${sec.assignedPlan!.map((p, i) =>
@@ -155,11 +96,11 @@ These 3-gram constructions are already overused across prior chapters. Avoid the
     // G5: Include assigned quotes so the LLM knows which scriptures belong in this section
     const quotesText = (sec.quotes ?? []).length > 0
       ? `\nASSIGNED QUOTES FOR THIS SECTION:\n${sec.quotes.map((q) =>
-          `  • ${q.reference}${q.translation ? ` (${q.translation})` : ""}: "${q.text}"`
+          `  • ${q.reference}${q.translation ? ` (${q.translation})` : ""}: "${q.text.slice(0, 200)}${q.text.length > 200 ? "…" : ""}"`
         ).join("\n")}`
       : "";
     const lastFlag = sec.isLastSectionInChapter ? " [LAST SECTION — hard chapter boundary: do NOT develop the next chapter's themes]" : "";
-    return `══ SECTION ${idx + 1} of ${sections.length}: §${sec.sectionNumber} — "${sec.heading}" (~${sec.targetWordCount ?? 500} words; ${sectionWordTally} source words supplied)${lastFlag} ══${keyPointsText}${quotesText}${planBlock}\n\nTRANSCRIPT EXCERPTS:\n${excerpts}`;
+    return `══ SECTION ${idx + 1} of ${sections.length}: §${sec.sectionNumber} — "${sec.heading}" (~${sec.targetWordCount ?? 500} words)${lastFlag} ══${keyPointsText}${quotesText}${planBlock}\n\nTRANSCRIPT EXCERPTS:\n${excerpts}`;
   }).join("\n\n────────────────────────────────────────────\n\n");
 
   // ── System prompt ──────────────────────────────────────────────────────────
@@ -273,7 +214,6 @@ Each section is sealed. Do NOT preview the next section's content from within th
 • Incomplete or broken sentences that trail off without a point
 • Any sentence beginning with a markdown heading symbol (#, ##, ###)
 ${SOURCE_LOCK_RULES}${voiceDnaBlock}${authorConfigBlock}${priorContextBlock}${bannedRecapsBlock}${quoteDedupBlock}${lexicalBlock}${translationBlock}
-${coveredPointsBlock}
 ${READER_NORMALIZATION_RULES}
 ${PROSE_MASTERY_RULES}
 ${PREMIUM_BOOK_STYLE_RULES}`;
@@ -329,11 +269,8 @@ ${sectionPayload}`;
           model: deepSeekModel,
           schema: WriteChapterOutputSchema,
           mode: "json",
-          maxTokens: 24_000, // Sufficient for 3-5 sections at 800-1200 words each
-          // Single-pass chapter writing benefits from stable JSON generation.
-          // Instructions handle flow and connectivity; temperature stays conservative.
-          temperature: 0.5,
-          experimental_repairText: repairGeneratedJson,
+          maxTokens: 16_000, // G2: explicit ceiling for full-chapter output
+          temperature: 0.55, // G1: lower temp for cross-section coherence
           system,
           prompt,
         });
